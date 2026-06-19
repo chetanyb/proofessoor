@@ -3,6 +3,7 @@
 //! The binary parses and validates the CLI, initializes logging, and dispatches
 //! to the requested subcommand.
 
+mod beacon;
 mod config;
 mod zkboost;
 
@@ -18,7 +19,7 @@ async fn main() -> Result<()> {
     init_tracing(&cli.log_level)?;
 
     match cli.command {
-        Command::Request(args) => run_request(args),
+        Command::Request(args) => run_request(args).await,
         Command::Stream(args) => run_stream(args),
         Command::Check(args) => run_check(args).await,
     }
@@ -41,14 +42,19 @@ fn init_tracing(log_level: &str) -> Result<()> {
 }
 
 /// Handles the `request` subcommand.
-fn run_request(args: RequestArgs) -> Result<()> {
-    let proof_types = render_proof_types(&args.proof_types);
+///
+/// Fetches the requested beacon block and reports its metadata.
+async fn run_request(args: RequestArgs) -> Result<()> {
+    let beacon = beacon::Client::new(args.endpoints.beacon_rpc.clone())?;
+    let block = beacon.get_block(&args.block_id).await?;
+
     tracing::info!(
-        beacon_rpc = %args.endpoints.beacon_rpc,
+        slot = block.slot(),
+        beacon_block_root = %block.root(),
+        fork = %block.fork(),
+        proof_types = %render_proof_types(&args.proof_types),
         zkboost_url = %args.endpoints.zkboost_url,
-        block_id = %args.block_id,
-        proof_types = %proof_types,
-        "request: configuration parsed"
+        "fetched beacon block"
     );
     Ok(())
 }
