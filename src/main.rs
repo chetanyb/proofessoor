@@ -4,6 +4,7 @@
 //! to the requested subcommand.
 
 mod config;
+mod zkboost;
 
 use anyhow::{Context, Result};
 use clap::Parser;
@@ -11,14 +12,15 @@ use tracing_subscriber::EnvFilter;
 
 use crate::config::{CheckArgs, Cli, Command, RequestArgs, StreamArgs};
 
-fn main() -> Result<()> {
+#[tokio::main]
+async fn main() -> Result<()> {
     let cli = Cli::parse();
     init_tracing(&cli.log_level)?;
 
     match cli.command {
         Command::Request(args) => run_request(args),
         Command::Stream(args) => run_stream(args),
-        Command::Check(args) => run_check(args),
+        Command::Check(args) => run_check(args).await,
     }
 }
 
@@ -65,14 +67,48 @@ fn run_stream(args: StreamArgs) -> Result<()> {
 }
 
 /// Handles the `check` subcommand.
-fn run_check(args: CheckArgs) -> Result<()> {
-    let proof_types = render_proof_types(&args.proof_types);
+///
+/// Confirms zkBoost is reachable, reports the provable proof types, and fails
+/// if any requested proof type is not available.
+async fn run_check(args: CheckArgs) -> Result<()> {
+    let client = zkboost::Client::new(args.zkboost_url.clone())?;
+    let available = client.proof_types().await?;
+
+    let provable: Vec<&str> = available
+        .iter()
+        .filter(|info| info.can_prove)
+        .map(|info| info.proof_type.as_str())
+        .collect();
+
     tracing::info!(
         zkboost_url = %args.zkboost_url,
-        proof_types = %proof_types,
-        "check: configuration parsed"
+        provable = %provable.join(","),
+        "zkBoost reachable"
     );
-    Ok(())
+
+    if args.proof_types.is_empty() {
+        return Ok(());
+    }
+
+    let missing: Vec<&str> = args
+        .proof_types
+        .iter()
+        .map(config::ProofTypeName::as_str)
+        .filter(|name| !provable.contains(name))
+        .collect();
+
+    if missing.is_empty() {
+        tracing::info!(
+            requested = %render_proof_types(&args.proof_types),
+            "all requested proof types are available"
+        );
+        Ok(())
+    } else {
+        anyhow::bail!(
+            "requested proof types not available on zkBoost: {}",
+            missing.join(",")
+        )
+    }
 }
 
 /// Renders proof types as a comma-separated string for logging.
