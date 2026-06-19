@@ -1,0 +1,7 @@
+# Rust build artifacts
+/target
+dist/
+
+# Local environment and logs
+.env
+*.log

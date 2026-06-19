@@ -1,0 +1,4 @@
+# Tests may use unwrap/expect: a panic there is a test failure, not a
+# production fault. The deny-level lints still apply to non-test code.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
