@@ -48,6 +48,15 @@ fn init_tracing(log_level: &str) -> Result<()> {
 /// Fetches the requested beacon block, builds the zkBoost payload request,
 /// submits it for proving, and reports the resulting `new_payload_request_root`.
 async fn run_request(args: RequestArgs) -> Result<()> {
+    let artifacts = zkboost::Artifacts {
+        download: args.download,
+        verify: args.verify,
+        out_dir: args.out_dir.clone(),
+    };
+    if artifacts.needs_proof_bytes() && !args.wait {
+        anyhow::bail!("--download, --verify, and --out-dir require --wait");
+    }
+
     let beacon = beacon::Client::new(args.endpoints.beacon_rpc.clone())?;
     let zkboost = zkboost::Client::new(args.endpoints.zkboost_url.clone())?;
     let proof_types = args
@@ -85,7 +94,9 @@ async fn run_request(args: RequestArgs) -> Result<()> {
     );
 
     if args.wait {
-        zkboost.wait_for_proofs(server_root, &proof_types).await?;
+        zkboost
+            .wait_for_proofs(server_root, &proof_types, &artifacts)
+            .await?;
     }
     Ok(())
 }

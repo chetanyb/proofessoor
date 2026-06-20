@@ -5,6 +5,7 @@
 //! decoded into explicit types.
 
 use std::collections::HashSet;
+use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -22,6 +23,24 @@ const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 pub fn parse_proof_type(name: &str) -> Result<ProofType> {
     name.parse()
         .map_err(|e| anyhow!("unknown proof type '{name}': {e}"))
+}
+
+/// Optional actions taken for each proof once it completes.
+#[derive(Debug, Clone, Default)]
+pub struct Artifacts {
+    /// Download the completed proof bytes.
+    pub download: bool,
+    /// Verify the completed proof through zkBoost.
+    pub verify: bool,
+    /// Directory to write downloaded proof bytes to.
+    pub out_dir: Option<PathBuf>,
+}
+
+impl Artifacts {
+    /// Whether any action requires fetching the proof bytes.
+    pub fn needs_proof_bytes(&self) -> bool {
+        self.download || self.verify || self.out_dir.is_some()
+    }
 }
 
 /// Capabilities of a single proof type advertised by a zkBoost server.
@@ -82,9 +101,16 @@ impl Client {
 
     /// Waits for every requested proof to complete or fail, logging each result.
     ///
-    /// Subscribes to the proof event stream filtered to `root`. Returns an error
-    /// if any requested proof fails or the stream ends before all are resolved.
-    pub async fn wait_for_proofs(&self, root: Hash256, proof_types: &[ProofType]) -> Result<()> {
+    /// Subscribes to the proof event stream filtered to `root`. For completed
+    /// proofs it optionally downloads, verifies, and writes the bytes per
+    /// `artifacts`. Returns an error if any requested proof fails or the stream
+    /// ends before all are resolved.
+    pub async fn wait_for_proofs(
+        &self,
+        root: Hash256,
+        proof_types: &[ProofType],
+        artifacts: &Artifacts,
+    ) -> Result<()> {
         let mut events = Box::pin(self.inner.subscribe_proof_events(Some(root)));
         let mut remaining: HashSet<ProofType> = proof_types.iter().copied().collect();
         let mut failed: Vec<ProofType> = Vec::new();
@@ -103,6 +129,10 @@ impl Client {
             match event {
                 ProofEvent::ProofComplete(complete) => {
                     tracing::info!(%root, proof_type = %complete.proof_type, "proof complete");
+                    if artifacts.needs_proof_bytes() {
+                        self.collect_artifacts(root, complete.proof_type, artifacts)
+                            .await?;
+                    }
                 }
                 ProofEvent::ProofFailure(failure) => {
                     tracing::warn!(
@@ -123,6 +153,47 @@ impl Client {
             let names: Vec<&str> = failed.iter().map(ProofType::as_str).collect();
             bail!("proof generation failed for: {}", names.join(","))
         }
+    }
+
+    /// Downloads, optionally verifies, and optionally writes a completed proof.
+    async fn collect_artifacts(
+        &self,
+        root: Hash256,
+        proof_type: ProofType,
+        artifacts: &Artifacts,
+    ) -> Result<()> {
+        let proof = self
+            .inner
+            .get_proof(root, proof_type)
+            .await
+            .context("failed to download proof bytes")?;
+
+        if artifacts.verify {
+            let response = self
+                .inner
+                .verify_proof(root, proof_type, &proof)
+                .await
+                .context("failed to verify proof")?;
+            if !response.status.is_valid() {
+                bail!("proof for {proof_type} failed verification");
+            }
+            tracing::info!(%root, %proof_type, "proof verified");
+        }
+
+        if let Some(dir) = &artifacts.out_dir {
+            tokio::fs::create_dir_all(dir)
+                .await
+                .with_context(|| format!("failed to create out-dir {}", dir.display()))?;
+            let path = dir.join(format!("{root}_{proof_type}.proof"));
+            tokio::fs::write(&path, &proof)
+                .await
+                .with_context(|| format!("failed to write proof to {}", path.display()))?;
+            tracing::info!(%root, %proof_type, path = %path.display(), bytes = proof.len(), "proof written");
+        } else if artifacts.download {
+            tracing::info!(%root, %proof_type, bytes = proof.len(), "proof downloaded");
+        }
+
+        Ok(())
     }
 
     /// Fetches the proof types advertised by the server (`GET /v1/proof_types`).

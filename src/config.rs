@@ -4,6 +4,7 @@
 //! concepts (block identifiers, proof types). It performs no network I/O.
 
 use std::fmt;
+use std::path::PathBuf;
 
 use clap::{Args, Parser, Subcommand};
 use url::Url;
@@ -72,6 +73,18 @@ pub struct RequestArgs {
     /// Wait for each requested proof to complete or fail before exiting.
     #[arg(long)]
     pub wait: bool,
+
+    /// Download completed proof bytes (requires --wait).
+    #[arg(long)]
+    pub download: bool,
+
+    /// Verify completed proofs through zkBoost (requires --wait).
+    #[arg(long)]
+    pub verify: bool,
+
+    /// Directory to write downloaded proof bytes to (requires --wait).
+    #[arg(long)]
+    pub out_dir: Option<PathBuf>,
 }
 
 /// Arguments for `proofessoor stream`.

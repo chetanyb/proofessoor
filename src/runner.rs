@@ -163,7 +163,9 @@ async fn process_block(
     );
 
     if wait {
-        zkboost.wait_for_proofs(server_root, proof_types).await?;
+        zkboost
+            .wait_for_proofs(server_root, proof_types, &zkboost::Artifacts::default())
+            .await?;
     }
     Ok(())
 }
