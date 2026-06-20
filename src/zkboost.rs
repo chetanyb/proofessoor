@@ -4,12 +4,16 @@
 //! Responses are treated as untrusted: status codes are checked and bodies are
 //! decoded into explicit types.
 
+use std::collections::HashSet;
 use std::time::Duration;
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result, anyhow, bail};
+use futures::StreamExt;
 use serde::Deserialize;
 use url::Url;
-use zkboost_client::{Hash256, MainnetEthSpec, NewPayloadRequest, ProofType, zkBoostClient};
+use zkboost_client::{
+    Hash256, MainnetEthSpec, NewPayloadRequest, ProofEvent, ProofType, zkBoostClient,
+};
 
 /// Default timeout applied to zkBoost HTTP requests.
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
@@ -74,6 +78,51 @@ impl Client {
             .await
             .context("zkBoost rejected the proof request")?;
         Ok(response.new_payload_request_root)
+    }
+
+    /// Waits for every requested proof to complete or fail, logging each result.
+    ///
+    /// Subscribes to the proof event stream filtered to `root`. Returns an error
+    /// if any requested proof fails or the stream ends before all are resolved.
+    pub async fn wait_for_proofs(&self, root: Hash256, proof_types: &[ProofType]) -> Result<()> {
+        let mut events = Box::pin(self.inner.subscribe_proof_events(Some(root)));
+        let mut remaining: HashSet<ProofType> = proof_types.iter().copied().collect();
+        let mut failed: Vec<ProofType> = Vec::new();
+
+        while !remaining.is_empty() {
+            let Some(event) = events.next().await else {
+                bail!("zkBoost proof event stream ended before all proofs resolved");
+            };
+            let event = event.context("error reading the zkBoost proof event stream")?;
+
+            // Ignore events for proof types we did not request.
+            if !remaining.remove(&event.proof_type()) {
+                continue;
+            }
+
+            match event {
+                ProofEvent::ProofComplete(complete) => {
+                    tracing::info!(%root, proof_type = %complete.proof_type, "proof complete");
+                }
+                ProofEvent::ProofFailure(failure) => {
+                    tracing::warn!(
+                        %root,
+                        proof_type = %failure.proof_type,
+                        reason = ?failure.reason,
+                        error = %failure.error,
+                        "proof failed"
+                    );
+                    failed.push(failure.proof_type);
+                }
+            }
+        }
+
+        if failed.is_empty() {
+            Ok(())
+        } else {
+            let names: Vec<&str> = failed.iter().map(ProofType::as_str).collect();
+            bail!("proof generation failed for: {}", names.join(","))
+        }
     }
 
     /// Fetches the proof types advertised by the server (`GET /v1/proof_types`).

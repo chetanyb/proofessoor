@@ -82,6 +82,10 @@ async fn run_request(args: RequestArgs) -> Result<()> {
         proof_types = %render_proof_types(&args.proof_types),
         "proof requested"
     );
+
+    if args.wait {
+        zkboost.wait_for_proofs(server_root, &proof_types).await?;
+    }
     Ok(())
 }
 

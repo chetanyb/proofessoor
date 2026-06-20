@@ -68,6 +68,10 @@ pub struct RequestArgs {
     /// Beacon block to prove: head, genesis, finalized, justified, a slot, or a 0x root.
     #[arg(long, default_value = "head", value_parser = parse_block_id)]
     pub block_id: BlockId,
+
+    /// Wait for each requested proof to complete or fail before exiting.
+    #[arg(long)]
+    pub wait: bool,
 }
 
 /// Arguments for `proofessoor stream`.
