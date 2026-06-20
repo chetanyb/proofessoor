@@ -9,6 +9,7 @@ description = "Clientless execution-proof requestor for zkBoost"
 [dependencies]
 anyhow = "1.0"
 async-stream = "0.3"
+async-trait = "0.1"
 clap = { version = "4.5", features = ["derive", "env"] }
 futures = "0.3"
 lighthouse_types = { git = "https://github.com/sigp/lighthouse", branch = "unstable", package = "types" }

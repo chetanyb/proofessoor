@@ -7,6 +7,7 @@ mod beacon;
 mod config;
 mod request;
 mod runner;
+mod status;
 mod zkboost;
 
 use anyhow::{Context, Result};

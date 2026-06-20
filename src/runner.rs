@@ -18,6 +18,7 @@ use zkboost_client::ProofType;
 
 use crate::beacon::{self, BlockEvent};
 use crate::config::{BlockId, StreamArgs};
+use crate::status::{BlockRecord, JsonStatusStore, Outcome, StatusStore};
 use crate::{request, zkboost};
 
 /// Delay before reconnecting after the beacon event stream drops.
@@ -38,6 +39,19 @@ pub async fn run(args: StreamArgs) -> Result<()> {
     );
     let semaphore = Arc::new(Semaphore::new(args.max_inflight));
     let wait = args.wait;
+
+    let store: Option<Arc<dyn StatusStore>> = match &args.state_dir {
+        Some(dir) => {
+            let store = JsonStatusStore::load(dir).await?;
+            info!(
+                state_dir = %dir.display(),
+                latest_slot = ?store.latest_slot().await,
+                "loaded request status from state directory"
+            );
+            Some(Arc::new(store))
+        }
+        None => None,
+    };
 
     let mut sigterm =
         signal(SignalKind::terminate()).context("failed to install SIGTERM handler")?;
@@ -100,10 +114,12 @@ pub async fn run(args: StreamArgs) -> Result<()> {
             let beacon = beacon.clone();
             let zkboost = zkboost.clone();
             let proof_types = proof_types.clone();
+            let store = store.clone();
             tasks.spawn(async move {
                 let _permit = permit;
                 if let Err(error) =
-                    process_block(&beacon, &zkboost, &proof_types, &event, wait).await
+                    process_block(&beacon, &zkboost, &proof_types, store.as_ref(), &event, wait)
+                        .await
                 {
                     warn!(slot = event.slot, block = %event.block, %error, "block processing failed");
                 }
@@ -138,6 +154,7 @@ async fn process_block(
     beacon: &beacon::Client,
     zkboost: &zkboost::Client,
     proof_types: &[ProofType],
+    store: Option<&Arc<dyn StatusStore>>,
     event: &BlockEvent,
     wait: bool,
 ) -> Result<()> {
@@ -145,12 +162,33 @@ async fn process_block(
     let fetched = beacon.get_block(&block_id).await?;
     let payload_request = request::build(fetched.block())?;
     let local_root = request::root(&payload_request);
+    let root_hex = local_root.to_string();
+
+    // Skip blocks already requested in a previous run.
+    if let Some(store) = store
+        && store.seen(&root_hex).await
+    {
+        info!(slot = fetched.slot(), root = %local_root, "request already recorded; skipping");
+        return Ok(());
+    }
 
     let server_root = zkboost.request_proof(&payload_request, proof_types).await?;
     if server_root != local_root {
         anyhow::bail!(
             "new_payload_request_root mismatch: local {local_root} != server {server_root}"
         );
+    }
+
+    if let Some(store) = store {
+        store
+            .record(BlockRecord::new(
+                fetched.slot(),
+                fetched.root().to_string(),
+                payload_request.block_number(),
+                root_hex.clone(),
+                proof_types.iter().map(|p| p.as_str().to_string()).collect(),
+            ))
+            .await?;
     }
 
     info!(
@@ -163,9 +201,18 @@ async fn process_block(
     );
 
     if wait {
-        zkboost
+        let result = zkboost
             .wait_for_proofs(server_root, proof_types, &zkboost::Artifacts::default())
-            .await?;
+            .await;
+        if let Some(store) = store {
+            let outcome = if result.is_ok() {
+                Outcome::Complete
+            } else {
+                Outcome::Failed
+            };
+            store.set_outcome(&root_hex, outcome).await?;
+        }
+        result?;
     }
     Ok(())
 }

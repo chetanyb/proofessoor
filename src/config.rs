@@ -109,6 +109,10 @@ pub struct StreamArgs {
     /// Wait for each block's proofs to complete or fail.
     #[arg(long)]
     pub wait: bool,
+
+    /// Directory for persistent request status (enables restart de-duplication).
+    #[arg(long)]
+    pub state_dir: Option<PathBuf>,
 }
 
 /// Arguments for `proofessoor check`.
