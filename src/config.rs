@@ -92,6 +92,10 @@ pub struct StreamArgs {
     /// Maximum number of in-flight proof requests. Conservative default of 1.
     #[arg(long, default_value_t = 1)]
     pub max_inflight: usize,
+
+    /// Wait for each block's proofs to complete or fail.
+    #[arg(long)]
+    pub wait: bool,
 }
 
 /// Arguments for `proofessoor check`.

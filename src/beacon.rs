@@ -7,7 +7,11 @@
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
+use async_stream::try_stream;
+use futures::{Stream, StreamExt};
 use lighthouse_types::{ForkName, ForkVersionDecode, Hash256, MainnetEthSpec, SignedBeaconBlock};
+use reqwest_eventsource::{Event as SseEvent, EventSource};
+use serde::Deserialize;
 use url::Url;
 
 use crate::config::BlockId;
@@ -45,6 +49,28 @@ impl FetchedBlock {
     pub fn block(&self) -> &SignedBeaconBlock<MainnetEthSpec> {
         &self.block
     }
+}
+
+/// A `block` event from the Beacon API event stream.
+#[derive(Debug, Clone, Deserialize)]
+pub struct BlockEvent {
+    /// Slot of the new block.
+    #[serde(deserialize_with = "deserialize_quoted_u64")]
+    pub slot: u64,
+    /// Root of the new block.
+    pub block: Hash256,
+    /// Whether the node is optimistically synced (the block is not yet verified).
+    #[serde(default)]
+    pub execution_optimistic: bool,
+}
+
+/// Deserializes a JSON-quoted integer (the Beacon API encodes slots as strings).
+fn deserialize_quoted_u64<'de, D>(deserializer: D) -> Result<u64, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let raw = String::deserialize(deserializer)?;
+    raw.parse().map_err(serde::de::Error::custom)
 }
 
 /// HTTP client for the Beacon API.
@@ -109,5 +135,36 @@ impl Client {
             fork: fork_name,
             block,
         })
+    }
+
+    /// Subscribes to the Beacon API `block` event stream
+    /// (`GET /eth/v1/events?topics=block`).
+    pub fn subscribe_block_events(&self) -> impl Stream<Item = Result<BlockEvent>> + Send + '_ {
+        try_stream! {
+            let mut url = self
+                .endpoint
+                .join("/eth/v1/events")
+                .context("failed to construct beacon events URL")?;
+            url.query_pairs_mut().append_pair("topics", "block");
+
+            let mut events = EventSource::new(self.http.get(url))
+                .map_err(|e| anyhow!("failed to open the beacon event stream: {e}"))?;
+
+            while let Some(event) = events.next().await {
+                match event {
+                    Ok(SseEvent::Open) => {}
+                    Ok(SseEvent::Message(message)) if message.event == "block" => {
+                        let block_event: BlockEvent = serde_json::from_str(&message.data)
+                            .context("failed to decode a beacon block event")?;
+                        yield block_event;
+                    }
+                    Ok(SseEvent::Message(_)) => {}
+                    Err(error) => {
+                        events.close();
+                        Err(anyhow!("beacon event stream error: {error}"))?;
+                    }
+                }
+            }
+        }
     }
 }

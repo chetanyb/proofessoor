@@ -8,14 +8,17 @@ description = "Clientless execution-proof requestor for zkBoost"
 
 [dependencies]
 anyhow = "1.0"
+async-stream = "0.3"
 clap = { version = "4.5", features = ["derive", "env"] }
 futures = "0.3"
 lighthouse_types = { git = "https://github.com/sigp/lighthouse", branch = "unstable", package = "types" }
 reqwest = { version = "0.12", features = ["json"] }
+reqwest-eventsource = "0.6"
 serde = { version = "1.0", features = ["derive"] }
+serde_json = "1"
 sha2 = "0.10"
 ssz_types = "0.14"
-tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "sync", "time"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 url = "2.5"

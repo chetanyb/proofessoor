@@ -6,13 +6,14 @@
 mod beacon;
 mod config;
 mod request;
+mod runner;
 mod zkboost;
 
 use anyhow::{Context, Result};
 use clap::Parser;
 use tracing_subscriber::EnvFilter;
 
-use crate::config::{CheckArgs, Cli, Command, RequestArgs, StreamArgs};
+use crate::config::{CheckArgs, Cli, Command, RequestArgs};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -21,7 +22,7 @@ async fn main() -> Result<()> {
 
     match cli.command {
         Command::Request(args) => run_request(args).await,
-        Command::Stream(args) => run_stream(args),
+        Command::Stream(args) => runner::run(args).await,
         Command::Check(args) => run_check(args).await,
     }
 }
@@ -86,19 +87,6 @@ async fn run_request(args: RequestArgs) -> Result<()> {
     if args.wait {
         zkboost.wait_for_proofs(server_root, &proof_types).await?;
     }
-    Ok(())
-}
-
-/// Handles the `stream` subcommand.
-fn run_stream(args: StreamArgs) -> Result<()> {
-    let proof_types = render_proof_types(&args.proof_types);
-    tracing::info!(
-        beacon_rpc = %args.endpoints.beacon_rpc,
-        zkboost_url = %args.endpoints.zkboost_url,
-        max_inflight = args.max_inflight,
-        proof_types = %proof_types,
-        "stream: configuration parsed"
-    );
     Ok(())
 }
 
