@@ -5,6 +5,7 @@
 
 mod beacon;
 mod config;
+mod request;
 mod zkboost;
 
 use anyhow::{Context, Result};
@@ -43,18 +44,25 @@ fn init_tracing(log_level: &str) -> Result<()> {
 
 /// Handles the `request` subcommand.
 ///
-/// Fetches the requested beacon block and reports its metadata.
+/// Fetches the requested beacon block, builds the zkBoost payload request, and
+/// reports its identifying root and execution-layer metadata.
 async fn run_request(args: RequestArgs) -> Result<()> {
     let beacon = beacon::Client::new(args.endpoints.beacon_rpc.clone())?;
     let block = beacon.get_block(&args.block_id).await?;
+    let payload_request = request::build(block.block())?;
 
     tracing::info!(
         slot = block.slot(),
         beacon_block_root = %block.root(),
         fork = %block.fork(),
+        execution_block_hash = %payload_request.block_hash(),
+        execution_block_number = payload_request.block_number(),
+        gas_used = payload_request.gas_used(),
+        new_payload_request_root = %request::root(&payload_request),
+        request_bytes = request::ssz_len(&payload_request),
         proof_types = %render_proof_types(&args.proof_types),
         zkboost_url = %args.endpoints.zkboost_url,
-        "fetched beacon block"
+        "built new payload request"
     );
     Ok(())
 }

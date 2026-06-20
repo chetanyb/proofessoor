@@ -40,6 +40,11 @@ impl FetchedBlock {
     pub fn root(&self) -> Hash256 {
         self.block.canonical_root()
     }
+
+    /// The decoded signed beacon block.
+    pub fn block(&self) -> &SignedBeaconBlock<MainnetEthSpec> {
+        &self.block
+    }
 }
 
 /// HTTP client for the Beacon API.

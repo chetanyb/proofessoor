@@ -12,10 +12,13 @@ clap = { version = "4.5", features = ["derive", "env"] }
 lighthouse_types = { git = "https://github.com/sigp/lighthouse", branch = "unstable", package = "types" }
 reqwest = { version = "0.12", features = ["json"] }
 serde = { version = "1.0", features = ["derive"] }
+sha2 = "0.10"
+ssz_types = "0.14"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 url = "2.5"
+zkboost-types = { path = "../../eth-act/zkboost/crates/types" }
 
 [lints.clippy]
 unwrap_used = "deny"
