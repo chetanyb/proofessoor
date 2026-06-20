@@ -44,12 +44,32 @@ fn init_tracing(log_level: &str) -> Result<()> {
 
 /// Handles the `request` subcommand.
 ///
-/// Fetches the requested beacon block, builds the zkBoost payload request, and
-/// reports its identifying root and execution-layer metadata.
+/// Fetches the requested beacon block, builds the zkBoost payload request,
+/// submits it for proving, and reports the resulting `new_payload_request_root`.
 async fn run_request(args: RequestArgs) -> Result<()> {
     let beacon = beacon::Client::new(args.endpoints.beacon_rpc.clone())?;
+    let zkboost = zkboost::Client::new(args.endpoints.zkboost_url.clone())?;
+    let proof_types = args
+        .proof_types
+        .iter()
+        .map(|name| zkboost::parse_proof_type(name.as_str()))
+        .collect::<Result<Vec<_>>>()?;
+
     let block = beacon.get_block(&args.block_id).await?;
     let payload_request = request::build(block.block())?;
+    let local_root = request::root(&payload_request);
+
+    let server_root = zkboost
+        .request_proof(&payload_request, &proof_types)
+        .await?;
+
+    // The server recomputes the root from the SSZ body we sent; a mismatch means
+    // our encoding disagrees with zkBoost's and the request is not what we built.
+    if server_root != local_root {
+        anyhow::bail!(
+            "new_payload_request_root mismatch: local {local_root} != server {server_root}"
+        );
+    }
 
     tracing::info!(
         slot = block.slot(),
@@ -57,12 +77,10 @@ async fn run_request(args: RequestArgs) -> Result<()> {
         fork = %block.fork(),
         execution_block_hash = %payload_request.block_hash(),
         execution_block_number = payload_request.block_number(),
-        gas_used = payload_request.gas_used(),
-        new_payload_request_root = %request::root(&payload_request),
+        new_payload_request_root = %server_root,
         request_bytes = request::ssz_len(&payload_request),
         proof_types = %render_proof_types(&args.proof_types),
-        zkboost_url = %args.endpoints.zkboost_url,
-        "built new payload request"
+        "proof requested"
     );
     Ok(())
 }
