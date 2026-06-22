@@ -92,6 +92,7 @@ pub trait StatusStore: Send + Sync {
 #[derive(Debug)]
 pub struct JsonStatusStore {
     path: PathBuf,
+    max_history: usize,
     state: Mutex<State>,
 }
 
@@ -122,11 +123,32 @@ impl State {
     fn latest_slot(&self) -> Option<u64> {
         self.records.values().map(|r| r.slot).max()
     }
+
+    /// Evicts the lowest-slot records until at most `max_history` remain
+    /// (`max_history` of 0 means unlimited).
+    fn prune(&mut self, max_history: usize) {
+        if max_history == 0 {
+            return;
+        }
+        while self.records.len() > max_history {
+            let oldest = self
+                .records
+                .iter()
+                .min_by_key(|(_, record)| record.slot)
+                .map(|(key, _)| key.clone());
+            match oldest {
+                Some(key) => {
+                    self.records.remove(&key);
+                }
+                None => break,
+            }
+        }
+    }
 }
 
 impl JsonStatusStore {
     /// Loads (or initializes) the store from `state_dir/status.json`.
-    pub async fn load(state_dir: &Path) -> Result<Self> {
+    pub async fn load(state_dir: &Path, max_history: usize) -> Result<Self> {
         tokio::fs::create_dir_all(state_dir)
             .await
             .with_context(|| format!("failed to create state dir {}", state_dir.display()))?;
@@ -142,6 +164,7 @@ impl JsonStatusStore {
 
         Ok(Self {
             path,
+            max_history,
             state: Mutex::new(state),
         })
     }
@@ -169,6 +192,7 @@ impl StatusStore for JsonStatusStore {
     async fn record(&self, record: BlockRecord) -> Result<()> {
         let mut state = self.state.lock().await;
         state.insert(record);
+        state.prune(self.max_history);
         self.persist(&state).await
     }
 
@@ -187,7 +211,18 @@ impl StatusStore for JsonStatusStore {
 /// In-memory status store without persistence (used when no state dir is set).
 #[derive(Debug, Default)]
 pub struct MemoryStatusStore {
+    max_history: usize,
     state: Mutex<State>,
+}
+
+impl MemoryStatusStore {
+    /// Creates a store retaining at most `max_history` records (0 = unlimited).
+    pub fn new(max_history: usize) -> Self {
+        Self {
+            max_history,
+            state: Mutex::new(State::default()),
+        }
+    }
 }
 
 #[async_trait]
@@ -197,7 +232,9 @@ impl StatusStore for MemoryStatusStore {
     }
 
     async fn record(&self, record: BlockRecord) -> Result<()> {
-        self.state.lock().await.insert(record);
+        let mut state = self.state.lock().await;
+        state.insert(record);
+        state.prune(self.max_history);
         Ok(())
     }
 
@@ -237,7 +274,7 @@ mod tests {
         let dir = std::env::temp_dir().join("proofessoor_status_test_dedup");
         let _ = tokio::fs::remove_dir_all(&dir).await;
 
-        let store = JsonStatusStore::load(&dir).await.expect("load");
+        let store = JsonStatusStore::load(&dir, 0).await.expect("load");
         assert!(!store.seen("0xa").await);
         store.record(record(100, "0xa")).await.expect("record");
         store.record(record(105, "0xb")).await.expect("record");
@@ -254,7 +291,7 @@ mod tests {
         let dir = std::env::temp_dir().join("proofessoor_status_test_reload");
         let _ = tokio::fs::remove_dir_all(&dir).await;
 
-        let store = JsonStatusStore::load(&dir).await.expect("load");
+        let store = JsonStatusStore::load(&dir, 0).await.expect("load");
         store.record(record(200, "0xroot")).await.expect("record");
         store
             .set_outcome("0xroot", Outcome::Complete)
@@ -262,10 +299,24 @@ mod tests {
             .expect("set outcome");
 
         // Reload as if after a restart.
-        let reloaded = JsonStatusStore::load(&dir).await.expect("reload");
+        let reloaded = JsonStatusStore::load(&dir, 0).await.expect("reload");
         assert!(reloaded.seen("0xroot").await);
         assert_eq!(reloaded.latest_slot().await, Some(200));
 
         let _ = tokio::fs::remove_dir_all(&dir).await;
+    }
+
+    #[tokio::test]
+    async fn prunes_oldest_beyond_max_history() {
+        let store = MemoryStatusStore::new(2);
+        store.record(record(100, "0xa")).await.expect("record");
+        store.record(record(101, "0xb")).await.expect("record");
+        store.record(record(102, "0xc")).await.expect("record");
+
+        // The oldest (slot 100) is evicted; the two newest remain.
+        assert!(!store.seen("0xa").await);
+        assert!(store.seen("0xb").await);
+        assert!(store.seen("0xc").await);
+        assert_eq!(store.latest_slot().await, Some(102));
     }
 }

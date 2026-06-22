@@ -123,6 +123,10 @@ pub struct StreamArgs {
     #[arg(long)]
     pub state_dir: Option<PathBuf>,
 
+    /// Maximum proof requests to retain in the status registry (0 = unlimited).
+    #[arg(long, default_value_t = 0)]
+    pub max_history: usize,
+
     /// Address to serve Prometheus /metrics and /health on (e.g. 127.0.0.1:9090).
     #[arg(long)]
     pub metrics_addr: Option<SocketAddr>,

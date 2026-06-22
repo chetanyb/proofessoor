@@ -53,7 +53,7 @@ pub async fn run(args: StreamArgs) -> Result<()> {
 
     let store: Arc<dyn StatusStore> = match &args.state_dir {
         Some(dir) => {
-            let store = JsonStatusStore::load(dir).await?;
+            let store = JsonStatusStore::load(dir, args.max_history).await?;
             info!(
                 state_dir = %dir.display(),
                 latest_slot = ?store.latest_slot().await,
@@ -61,7 +61,7 @@ pub async fn run(args: StreamArgs) -> Result<()> {
             );
             Arc::new(store)
         }
-        None => Arc::new(MemoryStatusStore::default()),
+        None => Arc::new(MemoryStatusStore::new(args.max_history)),
     };
 
     // Observe proof outcomes (and run artifact actions) independently of submission.
