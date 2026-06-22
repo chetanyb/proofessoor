@@ -74,7 +74,7 @@ pub struct RequestArgs {
     #[arg(long)]
     pub wait: bool,
 
-    /// Download completed proof bytes (requires --wait).
+    /// Save completed proofs to --out-dir (requires --wait).
     #[arg(long)]
     pub download: bool,
 
@@ -82,7 +82,7 @@ pub struct RequestArgs {
     #[arg(long)]
     pub verify: bool,
 
-    /// Directory to write downloaded proof bytes to (requires --wait).
+    /// Directory to save proofs in (default ./proofs; implies --download; requires --wait).
     #[arg(long)]
     pub out_dir: Option<PathBuf>,
 }

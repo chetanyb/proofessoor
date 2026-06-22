@@ -5,7 +5,7 @@
 //! decoded into explicit types.
 
 use std::collections::HashSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -25,21 +25,36 @@ pub fn parse_proof_type(name: &str) -> Result<ProofType> {
         .map_err(|e| anyhow!("unknown proof type '{name}': {e}"))
 }
 
+/// Default directory for saved proofs when `--out-dir` is not given.
+const DEFAULT_OUT_DIR: &str = "./proofs";
+
 /// Optional actions taken for each proof once it completes.
 #[derive(Debug, Clone, Default)]
 pub struct Artifacts {
-    /// Download the completed proof bytes.
+    /// Save the completed proof bytes to disk.
     pub download: bool,
     /// Verify the completed proof through zkBoost.
     pub verify: bool,
-    /// Directory to write downloaded proof bytes to.
+    /// Directory to save proofs in (implies download). Defaults to `./proofs`.
     pub out_dir: Option<PathBuf>,
 }
 
 impl Artifacts {
     /// Whether any action requires fetching the proof bytes.
     pub fn needs_proof_bytes(&self) -> bool {
-        self.download || self.verify || self.out_dir.is_some()
+        self.saves() || self.verify
+    }
+
+    /// Whether the proof should be written to disk.
+    fn saves(&self) -> bool {
+        self.download || self.out_dir.is_some()
+    }
+
+    /// The directory to save proofs in.
+    fn out_dir(&self) -> &Path {
+        self.out_dir
+            .as_deref()
+            .unwrap_or_else(|| Path::new(DEFAULT_OUT_DIR))
     }
 }
 
@@ -155,7 +170,7 @@ impl Client {
         }
     }
 
-    /// Downloads, optionally verifies, and optionally writes a completed proof.
+    /// Fetches a completed proof once, then verifies and/or saves it per `artifacts`.
     async fn collect_artifacts(
         &self,
         root: Hash256,
@@ -180,7 +195,8 @@ impl Client {
             tracing::info!(%root, %proof_type, "proof verified");
         }
 
-        if let Some(dir) = &artifacts.out_dir {
+        if artifacts.saves() {
+            let dir = artifacts.out_dir();
             tokio::fs::create_dir_all(dir)
                 .await
                 .with_context(|| format!("failed to create out-dir {}", dir.display()))?;
@@ -188,9 +204,7 @@ impl Client {
             tokio::fs::write(&path, &proof)
                 .await
                 .with_context(|| format!("failed to write proof to {}", path.display()))?;
-            tracing::info!(%root, %proof_type, path = %path.display(), bytes = proof.len(), "proof written");
-        } else if artifacts.download {
-            tracing::info!(%root, %proof_type, bytes = proof.len(), "proof downloaded");
+            tracing::info!(%root, %proof_type, path = %path.display(), bytes = proof.len(), "proof saved");
         }
 
         Ok(())
