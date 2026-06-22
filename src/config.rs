@@ -4,6 +4,7 @@
 //! concepts (block identifiers, proof types). It performs no network I/O.
 
 use std::fmt;
+use std::net::SocketAddr;
 use std::path::PathBuf;
 
 use clap::{Args, Parser, Subcommand};
@@ -121,6 +122,10 @@ pub struct StreamArgs {
     /// Directory for persistent request status (enables restart de-duplication).
     #[arg(long)]
     pub state_dir: Option<PathBuf>,
+
+    /// Address to serve Prometheus /metrics and /health on (e.g. 127.0.0.1:9090).
+    #[arg(long)]
+    pub metrics_addr: Option<SocketAddr>,
 }
 
 /// Arguments for `proofessoor check`.

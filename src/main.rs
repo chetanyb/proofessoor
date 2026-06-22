@@ -5,6 +5,7 @@
 
 mod beacon;
 mod config;
+mod metrics;
 mod request;
 mod runner;
 mod status;

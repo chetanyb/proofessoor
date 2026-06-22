@@ -42,8 +42,11 @@ pub struct BlockRecord {
     pub proof_types: Vec<String>,
     /// Latest known outcome.
     pub outcome: Outcome,
-    /// Unix milliseconds of the last update.
-    pub updated_at_ms: u64,
+    /// Unix milliseconds when the request was submitted.
+    pub requested_at_ms: u64,
+    /// Unix milliseconds when the request resolved (completed or failed), if it has.
+    #[serde(default)]
+    pub resolved_at_ms: Option<u64>,
 }
 
 impl BlockRecord {
@@ -62,7 +65,8 @@ impl BlockRecord {
             new_payload_request_root,
             proof_types,
             outcome: Outcome::Sent,
-            updated_at_ms: now_ms(),
+            requested_at_ms: now_ms(),
+            resolved_at_ms: None,
         }
     }
 }
@@ -76,8 +80,9 @@ pub trait StatusStore: Send + Sync {
     /// Records (or replaces) a request record.
     async fn record(&self, record: BlockRecord) -> Result<()>;
 
-    /// Updates the outcome of a recorded request, if present.
-    async fn set_outcome(&self, root: &str, outcome: Outcome) -> Result<()>;
+    /// Updates the outcome of a recorded request, returning its request-to-resolution
+    /// duration in milliseconds if the record existed.
+    async fn set_outcome(&self, root: &str, outcome: Outcome) -> Result<Option<u64>>;
 
     /// The highest slot recorded so far, if any.
     async fn latest_slot(&self) -> Option<u64>;
@@ -106,11 +111,12 @@ impl State {
             .insert(record.new_payload_request_root.clone(), record);
     }
 
-    fn set_outcome(&mut self, root: &str, outcome: Outcome) {
-        if let Some(record) = self.records.get_mut(root) {
-            record.outcome = outcome;
-            record.updated_at_ms = now_ms();
-        }
+    fn set_outcome(&mut self, root: &str, outcome: Outcome) -> Option<u64> {
+        let record = self.records.get_mut(root)?;
+        let now = now_ms();
+        record.outcome = outcome;
+        record.resolved_at_ms = Some(now);
+        Some(now.saturating_sub(record.requested_at_ms))
     }
 
     fn latest_slot(&self) -> Option<u64> {
@@ -166,10 +172,11 @@ impl StatusStore for JsonStatusStore {
         self.persist(&state).await
     }
 
-    async fn set_outcome(&self, root: &str, outcome: Outcome) -> Result<()> {
+    async fn set_outcome(&self, root: &str, outcome: Outcome) -> Result<Option<u64>> {
         let mut state = self.state.lock().await;
-        state.set_outcome(root, outcome);
-        self.persist(&state).await
+        let duration = state.set_outcome(root, outcome);
+        self.persist(&state).await?;
+        Ok(duration)
     }
 
     async fn latest_slot(&self) -> Option<u64> {
@@ -194,9 +201,8 @@ impl StatusStore for MemoryStatusStore {
         Ok(())
     }
 
-    async fn set_outcome(&self, root: &str, outcome: Outcome) -> Result<()> {
-        self.state.lock().await.set_outcome(root, outcome);
-        Ok(())
+    async fn set_outcome(&self, root: &str, outcome: Outcome) -> Result<Option<u64>> {
+        Ok(self.state.lock().await.set_outcome(root, outcome))
     }
 
     async fn latest_slot(&self) -> Option<u64> {

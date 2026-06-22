@@ -4,8 +4,9 @@
 //! `Eth-Consensus-Version` response header. Responses are treated as untrusted:
 //! status, headers, and body are all validated before use.
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
+use ::metrics::histogram;
 use anyhow::{Context, Result, anyhow, bail};
 use async_stream::try_stream;
 use futures::{Stream, StreamExt};
@@ -15,6 +16,7 @@ use serde::Deserialize;
 use url::Url;
 
 use crate::config::BlockId;
+use crate::metrics::REQUEST_STAGE_DURATION;
 
 /// Default timeout applied to Beacon API requests.
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
@@ -98,6 +100,7 @@ impl Client {
             .join(&path)
             .context("failed to construct beacon block URL")?;
 
+        let fetch_start = Instant::now();
         let response = self
             .http
             .get(url)
@@ -127,9 +130,14 @@ impl Client {
             .bytes()
             .await
             .context("failed to read the beacon block body")?;
+        histogram!(REQUEST_STAGE_DURATION, "stage" => "fetch")
+            .record(fetch_start.elapsed().as_secs_f64());
 
+        let decode_start = Instant::now();
         let block = SignedBeaconBlock::from_ssz_bytes_by_fork(&bytes, fork_name)
             .map_err(|e| anyhow!("failed to decode beacon block as {fork_name}: {e:?}"))?;
+        histogram!(REQUEST_STAGE_DURATION, "stage" => "ssz_decode")
+            .record(decode_start.elapsed().as_secs_f64());
 
         Ok(FetchedBlock {
             fork: fork_name,

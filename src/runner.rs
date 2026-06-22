@@ -7,8 +7,10 @@
 //! downloads/verifies completed proofs. The daemon stops on SIGINT/SIGTERM.
 
 use std::sync::Arc;
-use std::time::Duration;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, Instant};
 
+use ::metrics::{counter, gauge, histogram};
 use anyhow::{Context, Result};
 use futures::StreamExt;
 use tokio::signal::unix::{SignalKind, signal};
@@ -19,6 +21,11 @@ use zkboost_client::ProofType;
 
 use crate::beacon::{self, BlockEvent};
 use crate::config::{BlockId, StreamArgs};
+use crate::metrics::{
+    BLOCKS_OBSERVED, BLOCKS_SKIPPED, COMPLETION_DURATION, HEAD_LAG, INFLIGHT_REQUESTS,
+    LATEST_REQUESTED_SLOT, LATEST_SEEN_SLOT, PROOF_COMPLETIONS, PROOF_FAILURES,
+    PROOF_REQUEST_FAILURES, PROOF_REQUESTS, REQUEST_DURATION, REQUEST_STAGE_DURATION,
+};
 use crate::request;
 use crate::status::{BlockRecord, JsonStatusStore, MemoryStatusStore, Outcome, StatusStore};
 use crate::zkboost::{self, ProofEvent};
@@ -37,6 +44,7 @@ pub async fn run(args: StreamArgs) -> Result<()> {
             .collect::<Result<Vec<_>>>()?,
     );
     let semaphore = Arc::new(Semaphore::new(args.max_inflight));
+    let latest_requested = Arc::new(AtomicU64::new(0));
     let artifacts = Arc::new(zkboost::Artifacts {
         download: args.download,
         verify: args.verify,
@@ -58,6 +66,15 @@ pub async fn run(args: StreamArgs) -> Result<()> {
 
     // Observe proof outcomes (and run artifact actions) independently of submission.
     let watcher = tokio::spawn(watch(zkboost.clone(), store.clone(), artifacts.clone()));
+
+    let metrics_server = match args.metrics_addr {
+        Some(addr) => {
+            let handle = crate::metrics::install()?;
+            info!(%addr, "serving metrics and health");
+            Some(tokio::spawn(crate::metrics::serve(addr, handle)))
+        }
+        None => None,
+    };
 
     let mut sigterm =
         signal(SignalKind::terminate()).context("failed to install SIGTERM handler")?;
@@ -97,10 +114,18 @@ pub async fn run(args: StreamArgs) -> Result<()> {
             // Reap finished tasks so the join set does not grow unbounded.
             while tasks.try_join_next().is_some() {}
 
+            gauge!(LATEST_SEEN_SLOT).set(event.slot as f64);
+            let lag = event
+                .slot
+                .saturating_sub(latest_requested.load(Ordering::Relaxed));
+            gauge!(HEAD_LAG).set(lag as f64);
+
             if event.execution_optimistic {
+                counter!(BLOCKS_SKIPPED).increment(1);
                 info!(slot = event.slot, "skipping optimistic block");
                 continue;
             }
+            counter!(BLOCKS_OBSERVED).increment(1);
 
             // Bounded submission concurrency: wait for a free slot, but stay interruptible.
             let permit = tokio::select! {
@@ -121,10 +146,12 @@ pub async fn run(args: StreamArgs) -> Result<()> {
             let zkboost = zkboost.clone();
             let proof_types = proof_types.clone();
             let store = store.clone();
+            let latest_requested = latest_requested.clone();
             tasks.spawn(async move {
                 let _permit = permit;
                 if let Err(error) =
-                    process_block(&beacon, &zkboost, &proof_types, &store, &event).await
+                    process_block(&beacon, &zkboost, &proof_types, &store, &latest_requested, &event)
+                        .await
                 {
                     warn!(slot = event.slot, block = %event.block, %error, "block processing failed");
                 }
@@ -151,6 +178,9 @@ pub async fn run(args: StreamArgs) -> Result<()> {
     );
     tasks.shutdown().await;
     watcher.abort();
+    if let Some(server) = metrics_server {
+        server.abort();
+    }
     Ok(())
 }
 
@@ -160,26 +190,48 @@ async fn process_block(
     zkboost: &zkboost::Client,
     proof_types: &[ProofType],
     store: &Arc<dyn StatusStore>,
+    latest_requested: &AtomicU64,
     event: &BlockEvent,
 ) -> Result<()> {
+    let start = Instant::now();
     let block_id = BlockId::Root(event.block.to_string());
     let fetched = beacon.get_block(&block_id).await?;
+
+    let build_start = Instant::now();
     let payload_request = request::build(fetched.block())?;
     let local_root = request::root(&payload_request);
     let root_hex = local_root.to_string();
+    histogram!(REQUEST_STAGE_DURATION, "stage" => "build")
+        .record(build_start.elapsed().as_secs_f64());
 
     // Skip blocks already requested (in this run or a previous one).
     if store.seen(&root_hex).await {
+        counter!(BLOCKS_SKIPPED).increment(1);
         info!(slot = fetched.slot(), root = %local_root, "request already recorded; skipping");
         return Ok(());
     }
 
-    let server_root = zkboost.request_proof(&payload_request, proof_types).await?;
+    let submit_start = Instant::now();
+    let server_root = match zkboost.request_proof(&payload_request, proof_types).await {
+        Ok(root) => root,
+        Err(error) => {
+            counter!(PROOF_REQUEST_FAILURES).increment(1);
+            return Err(error);
+        }
+    };
+    histogram!(REQUEST_STAGE_DURATION, "stage" => "submit")
+        .record(submit_start.elapsed().as_secs_f64());
     if server_root != local_root {
         anyhow::bail!(
             "new_payload_request_root mismatch: local {local_root} != server {server_root}"
         );
     }
+
+    latest_requested.fetch_max(fetched.slot(), Ordering::Relaxed);
+    counter!(PROOF_REQUESTS).increment(1);
+    gauge!(INFLIGHT_REQUESTS).increment(1.0);
+    gauge!(LATEST_REQUESTED_SLOT).set(fetched.slot() as f64);
+    histogram!(REQUEST_DURATION).record(start.elapsed().as_secs_f64());
 
     store
         .record(BlockRecord::new(
@@ -241,7 +293,14 @@ async fn handle_proof_event(
             if !store.seen(&root_hex).await {
                 return Ok(());
             }
-            store.set_outcome(&root_hex, Outcome::Complete).await?;
+            let duration_ms = store.set_outcome(&root_hex, Outcome::Complete).await?;
+            let proof_type = complete.proof_type.to_string();
+            counter!(PROOF_COMPLETIONS, "proof_type" => proof_type.clone()).increment(1);
+            gauge!(INFLIGHT_REQUESTS).decrement(1.0);
+            if let Some(ms) = duration_ms {
+                histogram!(COMPLETION_DURATION, "proof_type" => proof_type)
+                    .record(ms as f64 / 1000.0);
+            }
             info!(root = %root_hex, proof_type = %complete.proof_type, "proof complete");
             if artifacts.needs_proof_bytes() {
                 zkboost
@@ -259,6 +318,10 @@ async fn handle_proof_event(
                 return Ok(());
             }
             store.set_outcome(&root_hex, Outcome::Failed).await?;
+            let proof_type = failure.proof_type.to_string();
+            let reason = format!("{:?}", failure.reason);
+            counter!(PROOF_FAILURES, "proof_type" => proof_type, "reason" => reason).increment(1);
+            gauge!(INFLIGHT_REQUESTS).decrement(1.0);
             warn!(
                 root = %root_hex,
                 proof_type = %failure.proof_type,

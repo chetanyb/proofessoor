@@ -5,3 +5,7 @@ dist/
 # Local environment and logs
 .env
 *.log
+
+# Local state and proof stores
+proofs/
+state/
