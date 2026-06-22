@@ -27,7 +27,7 @@ use crate::metrics::{
     PROOF_REQUEST_FAILURES, PROOF_REQUESTS, REQUEST_DURATION, REQUEST_STAGE_DURATION,
 };
 use crate::request;
-use crate::status::{BlockRecord, JsonStatusStore, MemoryStatusStore, Outcome, StatusStore};
+use crate::status::{self, BlockRecord, JsonStatusStore, MemoryStatusStore, Outcome, StatusStore};
 use crate::zkboost::{self, ProofEvent};
 
 /// Delay before reconnecting after an event stream drops.
@@ -193,6 +193,7 @@ async fn process_block(
     latest_requested: &AtomicU64,
     event: &BlockEvent,
 ) -> Result<()> {
+    let observed_at_ms = status::now_ms();
     let start = Instant::now();
     let block_id = BlockId::Root(event.block.to_string());
     let fetched = beacon.get_block(&block_id).await?;
@@ -240,6 +241,7 @@ async fn process_block(
             payload_request.block_number(),
             root_hex,
             proof_types.iter().map(|p| p.as_str().to_string()).collect(),
+            observed_at_ms,
         ))
         .await?;
 

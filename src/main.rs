@@ -15,7 +15,7 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use tracing_subscriber::EnvFilter;
 
-use crate::config::{CheckArgs, Cli, Command, RequestArgs};
+use crate::config::{CheckArgs, Cli, Command, RequestArgs, StatusArgs};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -26,6 +26,7 @@ async fn main() -> Result<()> {
         Command::Request(args) => run_request(args).await,
         Command::Stream(args) => runner::run(args).await,
         Command::Check(args) => run_check(args).await,
+        Command::Status(args) => run_status(args).await,
     }
 }
 
@@ -146,6 +147,35 @@ async fn run_check(args: CheckArgs) -> Result<()> {
             missing.join(",")
         )
     }
+}
+
+/// Handles the `status` subcommand: print recorded requests and per-block timing.
+async fn run_status(args: StatusArgs) -> Result<()> {
+    let records = status::read_records(&args.state_dir).await?;
+    if records.is_empty() {
+        println!("no recorded requests in {}", args.state_dir.display());
+        return Ok(());
+    }
+
+    println!(
+        "{:<10} {:<10} {:<9} {:>8} {:>8} {:>8}  root",
+        "slot", "exec#", "outcome", "prep", "zkboost", "e2e"
+    );
+    for record in &records {
+        let fmt_ms =
+            |value: Option<u64>| value.map_or_else(|| "-".to_string(), |ms| format!("{ms}ms"));
+        println!(
+            "{:<10} {:<10} {:<9} {:>8} {:>8} {:>8}  {}",
+            record.slot,
+            record.execution_block_number,
+            format!("{:?}", record.outcome).to_lowercase(),
+            format!("{}ms", record.prep_ms()),
+            fmt_ms(record.completion_ms()),
+            fmt_ms(record.end_to_end_ms()),
+            record.new_payload_request_root,
+        );
+    }
+    Ok(())
 }
 
 /// Renders proof types as a comma-separated string for logging.

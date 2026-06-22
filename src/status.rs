@@ -42,6 +42,9 @@ pub struct BlockRecord {
     pub proof_types: Vec<String>,
     /// Latest known outcome.
     pub outcome: Outcome,
+    /// Unix milliseconds when the block was discovered (processing started).
+    #[serde(default)]
+    pub observed_at_ms: u64,
     /// Unix milliseconds when the request was submitted.
     pub requested_at_ms: u64,
     /// Unix milliseconds when the request resolved (completed or failed), if it has.
@@ -50,13 +53,14 @@ pub struct BlockRecord {
 }
 
 impl BlockRecord {
-    /// Creates a record in the [`Outcome::Sent`] state, stamped with the current time.
+    /// Creates a record in the [`Outcome::Sent`] state, stamped with the submit time.
     pub fn new(
         slot: u64,
         beacon_block_root: String,
         execution_block_number: u64,
         new_payload_request_root: String,
         proof_types: Vec<String>,
+        observed_at_ms: u64,
     ) -> Self {
         Self {
             slot,
@@ -65,9 +69,27 @@ impl BlockRecord {
             new_payload_request_root,
             proof_types,
             outcome: Outcome::Sent,
+            observed_at_ms,
             requested_at_ms: now_ms(),
             resolved_at_ms: None,
         }
+    }
+
+    /// Prep time (discovery to submit) in milliseconds.
+    pub fn prep_ms(&self) -> u64 {
+        self.requested_at_ms.saturating_sub(self.observed_at_ms)
+    }
+
+    /// zkBoost turnaround (submit to resolution) in milliseconds, if resolved.
+    pub fn completion_ms(&self) -> Option<u64> {
+        self.resolved_at_ms
+            .map(|resolved| resolved.saturating_sub(self.requested_at_ms))
+    }
+
+    /// End-to-end time (discovery to resolution) in milliseconds, if resolved.
+    pub fn end_to_end_ms(&self) -> Option<u64> {
+        self.resolved_at_ms
+            .map(|resolved| resolved.saturating_sub(self.observed_at_ms))
     }
 }
 
@@ -248,11 +270,23 @@ impl StatusStore for MemoryStatusStore {
 }
 
 /// Current Unix time in milliseconds.
-fn now_ms() -> u64 {
+pub fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0)
+}
+
+/// Reads recorded block status from `state_dir/status.json`, sorted by slot.
+pub async fn read_records(state_dir: &Path) -> Result<Vec<BlockRecord>> {
+    let path = state_dir.join("status.json");
+    let bytes = tokio::fs::read(&path)
+        .await
+        .with_context(|| format!("failed to read {}", path.display()))?;
+    let state: State = serde_json::from_slice(&bytes).context("failed to parse status.json")?;
+    let mut records: Vec<BlockRecord> = state.records.into_values().collect();
+    records.sort_by_key(|record| record.slot);
+    Ok(records)
 }
 
 #[cfg(test)]
@@ -266,6 +300,7 @@ mod tests {
             slot - 1,
             root.to_string(),
             vec!["reth-zisk".to_string()],
+            0,
         )
     }
 

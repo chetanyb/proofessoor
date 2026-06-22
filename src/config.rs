@@ -38,6 +38,17 @@ pub enum Command {
 
     /// Check connectivity to zkBoost and validate requested proof types.
     Check(CheckArgs),
+
+    /// Show recorded request status and per-block timing from a state directory.
+    Status(StatusArgs),
+}
+
+/// Arguments for `proofessoor status`.
+#[derive(Debug, Args)]
+pub struct StatusArgs {
+    /// Directory containing the persisted status (status.json).
+    #[arg(long)]
+    pub state_dir: PathBuf,
 }
 
 /// Beacon API and zkBoost endpoints shared by `request` and `stream`.
