@@ -1,9 +1,10 @@
 //! Stream-mode orchestration.
 //!
 //! Consumes the Beacon API block event stream and, for each new non-optimistic
-//! block, builds and submits a proof request. Concurrency is bounded by a
-//! semaphore so requests cannot pile up faster than they drain, and the loop
-//! shuts down gracefully on SIGINT/SIGTERM.
+//! block, builds and submits a proof request — fire-and-forget, so submission
+//! keeps pace with block arrival. A separate watcher task observes zkBoost's
+//! proof events, records each outcome in the status registry, and optionally
+//! downloads/verifies completed proofs. The daemon stops on SIGINT/SIGTERM.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -18,16 +19,14 @@ use zkboost_client::ProofType;
 
 use crate::beacon::{self, BlockEvent};
 use crate::config::{BlockId, StreamArgs};
-use crate::status::{BlockRecord, JsonStatusStore, Outcome, StatusStore};
-use crate::{request, zkboost};
+use crate::request;
+use crate::status::{BlockRecord, JsonStatusStore, MemoryStatusStore, Outcome, StatusStore};
+use crate::zkboost::{self, ProofEvent};
 
-/// Delay before reconnecting after the beacon event stream drops.
+/// Delay before reconnecting after an event stream drops.
 const RECONNECT_DELAY: Duration = Duration::from_secs(2);
 
 /// Runs stream mode: request proofs for new non-optimistic beacon blocks.
-///
-/// The beacon event stream is reconnected after a transient drop; the daemon
-/// only stops on SIGINT/SIGTERM.
 pub async fn run(args: StreamArgs) -> Result<()> {
     let beacon = Arc::new(beacon::Client::new(args.endpoints.beacon_rpc.clone())?);
     let zkboost = Arc::new(zkboost::Client::new(args.endpoints.zkboost_url.clone())?);
@@ -38,9 +37,13 @@ pub async fn run(args: StreamArgs) -> Result<()> {
             .collect::<Result<Vec<_>>>()?,
     );
     let semaphore = Arc::new(Semaphore::new(args.max_inflight));
-    let wait = args.wait;
+    let artifacts = Arc::new(zkboost::Artifacts {
+        download: args.download,
+        verify: args.verify,
+        out_dir: args.out_dir.clone(),
+    });
 
-    let store: Option<Arc<dyn StatusStore>> = match &args.state_dir {
+    let store: Arc<dyn StatusStore> = match &args.state_dir {
         Some(dir) => {
             let store = JsonStatusStore::load(dir).await?;
             info!(
@@ -48,10 +51,13 @@ pub async fn run(args: StreamArgs) -> Result<()> {
                 latest_slot = ?store.latest_slot().await,
                 "loaded request status from state directory"
             );
-            Some(Arc::new(store))
+            Arc::new(store)
         }
-        None => None,
+        None => Arc::new(MemoryStatusStore::default()),
     };
+
+    // Observe proof outcomes (and run artifact actions) independently of submission.
+    let watcher = tokio::spawn(watch(zkboost.clone(), store.clone(), artifacts.clone()));
 
     let mut sigterm =
         signal(SignalKind::terminate()).context("failed to install SIGTERM handler")?;
@@ -96,7 +102,7 @@ pub async fn run(args: StreamArgs) -> Result<()> {
                 continue;
             }
 
-            // Bounded concurrency: wait for a free slot, but stay interruptible.
+            // Bounded submission concurrency: wait for a free slot, but stay interruptible.
             let permit = tokio::select! {
                 _ = tokio::signal::ctrl_c() => {
                     info!("received SIGINT, shutting down");
@@ -107,7 +113,7 @@ pub async fn run(args: StreamArgs) -> Result<()> {
                     break 'outer;
                 }
                 permit = semaphore.clone().acquire_owned() => {
-                    permit.context("proof request semaphore closed")?
+                    permit.context("proof submission semaphore closed")?
                 }
             };
 
@@ -118,8 +124,7 @@ pub async fn run(args: StreamArgs) -> Result<()> {
             tasks.spawn(async move {
                 let _permit = permit;
                 if let Err(error) =
-                    process_block(&beacon, &zkboost, &proof_types, store.as_ref(), &event, wait)
-                        .await
+                    process_block(&beacon, &zkboost, &proof_types, &store, &event).await
                 {
                     warn!(slot = event.slot, block = %event.block, %error, "block processing failed");
                 }
@@ -140,12 +145,12 @@ pub async fn run(args: StreamArgs) -> Result<()> {
         }
     }
 
-    // Submitted requests already reached zkBoost; abort any local in-flight work.
     info!(
         in_flight = tasks.len(),
-        "stopping; aborting in-flight requests"
+        "stopping; draining in-flight submissions"
     );
     tasks.shutdown().await;
+    watcher.abort();
     Ok(())
 }
 
@@ -154,9 +159,8 @@ async fn process_block(
     beacon: &beacon::Client,
     zkboost: &zkboost::Client,
     proof_types: &[ProofType],
-    store: Option<&Arc<dyn StatusStore>>,
+    store: &Arc<dyn StatusStore>,
     event: &BlockEvent,
-    wait: bool,
 ) -> Result<()> {
     let block_id = BlockId::Root(event.block.to_string());
     let fetched = beacon.get_block(&block_id).await?;
@@ -164,10 +168,8 @@ async fn process_block(
     let local_root = request::root(&payload_request);
     let root_hex = local_root.to_string();
 
-    // Skip blocks already requested in a previous run.
-    if let Some(store) = store
-        && store.seen(&root_hex).await
-    {
+    // Skip blocks already requested (in this run or a previous one).
+    if store.seen(&root_hex).await {
         info!(slot = fetched.slot(), root = %local_root, "request already recorded; skipping");
         return Ok(());
     }
@@ -179,17 +181,15 @@ async fn process_block(
         );
     }
 
-    if let Some(store) = store {
-        store
-            .record(BlockRecord::new(
-                fetched.slot(),
-                fetched.root().to_string(),
-                payload_request.block_number(),
-                root_hex.clone(),
-                proof_types.iter().map(|p| p.as_str().to_string()).collect(),
-            ))
-            .await?;
-    }
+    store
+        .record(BlockRecord::new(
+            fetched.slot(),
+            fetched.root().to_string(),
+            payload_request.block_number(),
+            root_hex,
+            proof_types.iter().map(|p| p.as_str().to_string()).collect(),
+        ))
+        .await?;
 
     info!(
         slot = fetched.slot(),
@@ -199,20 +199,74 @@ async fn process_block(
         new_payload_request_root = %server_root,
         "proof requested"
     );
+    Ok(())
+}
 
-    if wait {
-        let result = zkboost
-            .wait_for_proofs(server_root, proof_types, &zkboost::Artifacts::default())
-            .await;
-        if let Some(store) = store {
-            let outcome = if result.is_ok() {
-                Outcome::Complete
-            } else {
-                Outcome::Failed
+/// Observes proof events, recording outcomes and running artifact actions.
+///
+/// Reconnects after a transient stream drop; runs until aborted on shutdown.
+async fn watch(
+    zkboost: Arc<zkboost::Client>,
+    store: Arc<dyn StatusStore>,
+    artifacts: Arc<zkboost::Artifacts>,
+) {
+    loop {
+        let mut events = Box::pin(zkboost.subscribe_proof_events());
+        while let Some(event) = events.next().await {
+            let event = match event {
+                Ok(event) => event,
+                Err(error) => {
+                    warn!(%error, "proof event stream error; reconnecting");
+                    break;
+                }
             };
-            store.set_outcome(&root_hex, outcome).await?;
+            if let Err(error) = handle_proof_event(&zkboost, &store, &artifacts, event).await {
+                warn!(%error, "failed to handle proof event");
+            }
         }
-        result?;
+        tokio::time::sleep(RECONNECT_DELAY).await;
+    }
+}
+
+/// Records a single proof event's outcome and runs artifact actions on completion.
+async fn handle_proof_event(
+    zkboost: &zkboost::Client,
+    store: &Arc<dyn StatusStore>,
+    artifacts: &zkboost::Artifacts,
+    event: ProofEvent,
+) -> Result<()> {
+    match event {
+        ProofEvent::ProofComplete(complete) => {
+            let root_hex = complete.new_payload_request_root.to_string();
+            if !store.seen(&root_hex).await {
+                return Ok(());
+            }
+            store.set_outcome(&root_hex, Outcome::Complete).await?;
+            info!(root = %root_hex, proof_type = %complete.proof_type, "proof complete");
+            if artifacts.needs_proof_bytes() {
+                zkboost
+                    .collect_artifacts(
+                        complete.new_payload_request_root,
+                        complete.proof_type,
+                        artifacts,
+                    )
+                    .await?;
+            }
+        }
+        ProofEvent::ProofFailure(failure) => {
+            let root_hex = failure.new_payload_request_root.to_string();
+            if !store.seen(&root_hex).await {
+                return Ok(());
+            }
+            store.set_outcome(&root_hex, Outcome::Failed).await?;
+            warn!(
+                root = %root_hex,
+                proof_type = %failure.proof_type,
+                reason = ?failure.reason,
+                error = %failure.error,
+                "proof failed"
+            );
+        }
     }
     Ok(())
 }

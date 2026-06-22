@@ -9,12 +9,12 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
-use futures::StreamExt;
+use futures::{Stream, StreamExt};
 use serde::Deserialize;
 use url::Url;
-use zkboost_client::{
-    Hash256, MainnetEthSpec, NewPayloadRequest, ProofEvent, ProofType, zkBoostClient,
-};
+use zkboost_client::{Hash256, MainnetEthSpec, NewPayloadRequest, ProofType, zkBoostClient};
+
+pub use zkboost_client::ProofEvent;
 
 /// Default timeout applied to zkBoost HTTP requests.
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
@@ -114,6 +114,13 @@ impl Client {
         Ok(response.new_payload_request_root)
     }
 
+    /// Subscribes to all zkBoost proof events (no root filter).
+    pub fn subscribe_proof_events(&self) -> impl Stream<Item = Result<ProofEvent>> + Send + '_ {
+        self.inner
+            .subscribe_proof_events(None)
+            .map(|event| event.context("zkBoost proof event stream error"))
+    }
+
     /// Waits for every requested proof to complete or fail, logging each result.
     ///
     /// Subscribes to the proof event stream filtered to `root`. For completed
@@ -171,7 +178,7 @@ impl Client {
     }
 
     /// Fetches a completed proof once, then verifies and/or saves it per `artifacts`.
-    async fn collect_artifacts(
+    pub async fn collect_artifacts(
         &self,
         root: Hash256,
         proof_type: ProofType,

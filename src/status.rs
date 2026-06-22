@@ -96,6 +96,28 @@ struct State {
     records: HashMap<String, BlockRecord>,
 }
 
+impl State {
+    fn seen(&self, root: &str) -> bool {
+        self.records.contains_key(root)
+    }
+
+    fn insert(&mut self, record: BlockRecord) {
+        self.records
+            .insert(record.new_payload_request_root.clone(), record);
+    }
+
+    fn set_outcome(&mut self, root: &str, outcome: Outcome) {
+        if let Some(record) = self.records.get_mut(root) {
+            record.outcome = outcome;
+            record.updated_at_ms = now_ms();
+        }
+    }
+
+    fn latest_slot(&self) -> Option<u64> {
+        self.records.values().map(|r| r.slot).max()
+    }
+}
+
 impl JsonStatusStore {
     /// Loads (or initializes) the store from `state_dir/status.json`.
     pub async fn load(state_dir: &Path) -> Result<Self> {
@@ -135,34 +157,50 @@ impl JsonStatusStore {
 #[async_trait]
 impl StatusStore for JsonStatusStore {
     async fn seen(&self, root: &str) -> bool {
-        self.state.lock().await.records.contains_key(root)
+        self.state.lock().await.seen(root)
     }
 
     async fn record(&self, record: BlockRecord) -> Result<()> {
         let mut state = self.state.lock().await;
-        state
-            .records
-            .insert(record.new_payload_request_root.clone(), record);
+        state.insert(record);
         self.persist(&state).await
     }
 
     async fn set_outcome(&self, root: &str, outcome: Outcome) -> Result<()> {
         let mut state = self.state.lock().await;
-        if let Some(record) = state.records.get_mut(root) {
-            record.outcome = outcome;
-            record.updated_at_ms = now_ms();
-        }
+        state.set_outcome(root, outcome);
         self.persist(&state).await
     }
 
     async fn latest_slot(&self) -> Option<u64> {
-        self.state
-            .lock()
-            .await
-            .records
-            .values()
-            .map(|r| r.slot)
-            .max()
+        self.state.lock().await.latest_slot()
+    }
+}
+
+/// In-memory status store without persistence (used when no state dir is set).
+#[derive(Debug, Default)]
+pub struct MemoryStatusStore {
+    state: Mutex<State>,
+}
+
+#[async_trait]
+impl StatusStore for MemoryStatusStore {
+    async fn seen(&self, root: &str) -> bool {
+        self.state.lock().await.seen(root)
+    }
+
+    async fn record(&self, record: BlockRecord) -> Result<()> {
+        self.state.lock().await.insert(record);
+        Ok(())
+    }
+
+    async fn set_outcome(&self, root: &str, outcome: Outcome) -> Result<()> {
+        self.state.lock().await.set_outcome(root, outcome);
+        Ok(())
+    }
+
+    async fn latest_slot(&self) -> Option<u64> {
+        self.state.lock().await.latest_slot()
     }
 }
 

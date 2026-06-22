@@ -102,13 +102,21 @@ pub struct StreamArgs {
     )]
     pub proof_types: Vec<ProofTypeName>,
 
-    /// Maximum number of in-flight proof requests. Conservative default of 1.
+    /// Maximum number of concurrent proof submissions. Conservative default of 1.
     #[arg(long, default_value_t = 1)]
     pub max_inflight: usize,
 
-    /// Wait for each block's proofs to complete or fail.
+    /// Save completed proofs to --out-dir.
     #[arg(long)]
-    pub wait: bool,
+    pub download: bool,
+
+    /// Verify completed proofs through zkBoost.
+    #[arg(long)]
+    pub verify: bool,
+
+    /// Directory to save proofs in (default ./proofs; implies --download).
+    #[arg(long)]
+    pub out_dir: Option<PathBuf>,
 
     /// Directory for persistent request status (enables restart de-duplication).
     #[arg(long)]
