@@ -229,7 +229,7 @@ async fn process_block(
 
     latest_requested.fetch_max(fetched.slot(), Ordering::Relaxed);
     counter!(PROOF_REQUESTS).increment(1);
-    gauge!(INFLIGHT_REQUESTS).increment(1.0);
+    gauge!(INFLIGHT_REQUESTS).increment(proof_types.len() as f64);
     gauge!(LATEST_REQUESTED_SLOT).set(fetched.slot() as f64);
     histogram!(REQUEST_DURATION).record(start.elapsed().as_secs_f64());
 
