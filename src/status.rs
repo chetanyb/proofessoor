@@ -108,6 +108,9 @@ pub trait StatusStore: Send + Sync {
 
     /// The highest slot recorded so far, if any.
     async fn latest_slot(&self) -> Option<u64>;
+
+    /// All recorded requests, newest slot first.
+    async fn records(&self) -> Vec<BlockRecord>;
 }
 
 /// In-memory status store that snapshots to a JSON file in a state directory.
@@ -144,6 +147,12 @@ impl State {
 
     fn latest_slot(&self) -> Option<u64> {
         self.records.values().map(|r| r.slot).max()
+    }
+
+    fn snapshot(&self) -> Vec<BlockRecord> {
+        let mut records: Vec<BlockRecord> = self.records.values().cloned().collect();
+        records.sort_by_key(|record| std::cmp::Reverse(record.slot));
+        records
     }
 
     /// Evicts the lowest-slot records until at most `max_history` remain
@@ -228,6 +237,10 @@ impl StatusStore for JsonStatusStore {
     async fn latest_slot(&self) -> Option<u64> {
         self.state.lock().await.latest_slot()
     }
+
+    async fn records(&self) -> Vec<BlockRecord> {
+        self.state.lock().await.snapshot()
+    }
 }
 
 /// In-memory status store without persistence (used when no state dir is set).
@@ -266,6 +279,10 @@ impl StatusStore for MemoryStatusStore {
 
     async fn latest_slot(&self) -> Option<u64> {
         self.state.lock().await.latest_slot()
+    }
+
+    async fn records(&self) -> Vec<BlockRecord> {
+        self.state.lock().await.snapshot()
     }
 }
 

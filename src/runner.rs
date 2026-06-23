@@ -67,11 +67,11 @@ pub async fn run(args: StreamArgs) -> Result<()> {
     // Observe proof outcomes (and run artifact actions) independently of submission.
     let watcher = tokio::spawn(watch(zkboost.clone(), store.clone(), artifacts.clone()));
 
-    let metrics_server = match args.metrics_addr {
+    let http_server = match args.http_addr {
         Some(addr) => {
             let handle = crate::metrics::install()?;
-            info!(%addr, "serving metrics and health");
-            Some(tokio::spawn(crate::metrics::serve(addr, handle)))
+            info!(%addr, "serving health, metrics, and the dashboard API");
+            Some(tokio::spawn(crate::web::serve(addr, handle, store.clone())))
         }
         None => None,
     };
@@ -178,7 +178,7 @@ pub async fn run(args: StreamArgs) -> Result<()> {
     );
     tasks.shutdown().await;
     watcher.abort();
-    if let Some(server) = metrics_server {
+    if let Some(server) = http_server {
         server.abort();
     }
     Ok(())

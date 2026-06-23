@@ -1,17 +1,11 @@
-//! Optional Prometheus metrics and health endpoints.
+//! Prometheus metric names and recorder installation.
 //!
 //! Metric names live here as constants; the runner and watcher emit them via the
-//! `metrics` facade. When no metrics address is configured the recorder is not
-//! installed and the emit calls are cheap no-ops.
-
-use std::net::SocketAddr;
+//! `metrics` facade. When no HTTP address is configured the recorder is not
+//! installed and the emit calls are cheap no-ops. The HTTP surface that renders
+//! these lives in [`crate::web`].
 
 use anyhow::{Context, Result};
-use axum::Router;
-use axum::extract::State;
-use axum::http::StatusCode;
-use axum::response::IntoResponse;
-use axum::routing::get;
 use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusHandle};
 
 /// Total non-optimistic blocks observed.
@@ -57,27 +51,4 @@ pub fn install() -> Result<PrometheusHandle> {
         .context("failed to configure metric buckets")?
         .install_recorder()
         .context("failed to install the Prometheus recorder")
-}
-
-/// Serves `/health` and `/metrics` on `addr` until the serving task is cancelled.
-pub async fn serve(addr: SocketAddr, handle: PrometheusHandle) -> Result<()> {
-    let app = Router::new()
-        .route("/health", get(health))
-        .route("/metrics", get(render))
-        .with_state(handle);
-
-    let listener = tokio::net::TcpListener::bind(addr)
-        .await
-        .with_context(|| format!("failed to bind metrics listener on {addr}"))?;
-    axum::serve(listener, app)
-        .await
-        .context("metrics server error")
-}
-
-async fn health() -> impl IntoResponse {
-    StatusCode::OK
-}
-
-async fn render(State(handle): State<PrometheusHandle>) -> impl IntoResponse {
-    handle.render()
 }

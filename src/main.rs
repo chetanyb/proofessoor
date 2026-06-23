@@ -9,6 +9,7 @@ mod metrics;
 mod request;
 mod runner;
 mod status;
+mod web;
 mod zkboost;
 
 use anyhow::{Context, Result};
