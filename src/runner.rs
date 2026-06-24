@@ -328,10 +328,20 @@ async fn handle_proof_event(
             }
             let proof_type = failure.proof_type.to_string();
             let reason = format!("{:?}", failure.reason);
+            // Metrics stay labeled by the low-cardinality reason only; the
+            // free-form error text is kept on the record, never as a label.
+            counter!(PROOF_FAILURES, "proof_type" => proof_type, "reason" => reason.clone())
+                .increment(1);
             store
-                .set_outcome(&root_hex, Outcome::Failed, Some(reason.clone()))
+                .set_outcome(
+                    &root_hex,
+                    Outcome::Failed,
+                    Some(status::Failure {
+                        reason,
+                        error: failure.error.clone(),
+                    }),
+                )
                 .await?;
-            counter!(PROOF_FAILURES, "proof_type" => proof_type, "reason" => reason).increment(1);
             gauge!(INFLIGHT_REQUESTS).decrement(1.0);
             warn!(
                 root = %root_hex,

@@ -27,6 +27,18 @@ pub enum Outcome {
     Failed,
 }
 
+/// Structured detail for a failed proof, recorded for display and debugging.
+///
+/// `reason` is the low-cardinality category safe to use as a metric label;
+/// `error` is free-form text and belongs only on the record, never as a label.
+#[derive(Debug, Clone)]
+pub struct Failure {
+    /// Failure category (e.g. `WitnessTimeout`).
+    pub reason: String,
+    /// Human-readable detail about the specific failure.
+    pub error: String,
+}
+
 /// A recorded proof request for one beacon block.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BlockRecord {
@@ -42,9 +54,12 @@ pub struct BlockRecord {
     pub proof_types: Vec<String>,
     /// Latest known outcome.
     pub outcome: Outcome,
-    /// Failure reason (e.g. `WitnessTimeout`), set when the outcome is `Failed`.
+    /// Failure category (e.g. `WitnessTimeout`), set when the outcome is `Failed`.
     #[serde(default)]
     pub reason: Option<String>,
+    /// Human-readable failure detail, set when the outcome is `Failed`.
+    #[serde(default)]
+    pub error: Option<String>,
     /// Unix milliseconds when the block was discovered (processing started).
     #[serde(default)]
     pub observed_at_ms: u64,
@@ -73,6 +88,7 @@ impl BlockRecord {
             proof_types,
             outcome: Outcome::Sent,
             reason: None,
+            error: None,
             observed_at_ms,
             requested_at_ms: now_ms(),
             resolved_at_ms: None,
@@ -106,13 +122,13 @@ pub trait StatusStore: Send + Sync {
     /// Records (or replaces) a request record.
     async fn record(&self, record: BlockRecord) -> Result<()>;
 
-    /// Updates the outcome (and failure reason, if any) of a recorded request,
+    /// Updates the outcome (and failure detail, if any) of a recorded request,
     /// returning its request-to-resolution duration in milliseconds if present.
     async fn set_outcome(
         &self,
         root: &str,
         outcome: Outcome,
-        reason: Option<String>,
+        failure: Option<Failure>,
     ) -> Result<Option<u64>>;
 
     /// The highest slot recorded so far, if any.
@@ -146,11 +162,14 @@ impl State {
             .insert(record.new_payload_request_root.clone(), record);
     }
 
-    fn set_outcome(&mut self, root: &str, outcome: Outcome, reason: Option<String>) -> Option<u64> {
+    fn set_outcome(&mut self, root: &str, outcome: Outcome, failure: Option<Failure>) -> Option<u64> {
         let record = self.records.get_mut(root)?;
         let now = now_ms();
         record.outcome = outcome;
-        record.reason = reason;
+        if let Some(failure) = failure {
+            record.reason = Some(failure.reason);
+            record.error = Some(failure.error);
+        }
         record.resolved_at_ms = Some(now);
         Some(now.saturating_sub(record.requested_at_ms))
     }
@@ -241,10 +260,10 @@ impl StatusStore for JsonStatusStore {
         &self,
         root: &str,
         outcome: Outcome,
-        reason: Option<String>,
+        failure: Option<Failure>,
     ) -> Result<Option<u64>> {
         let mut state = self.state.lock().await;
-        let duration = state.set_outcome(root, outcome, reason);
+        let duration = state.set_outcome(root, outcome, failure);
         self.persist(&state).await?;
         Ok(duration)
     }
@@ -292,9 +311,9 @@ impl StatusStore for MemoryStatusStore {
         &self,
         root: &str,
         outcome: Outcome,
-        reason: Option<String>,
+        failure: Option<Failure>,
     ) -> Result<Option<u64>> {
-        Ok(self.state.lock().await.set_outcome(root, outcome, reason))
+        Ok(self.state.lock().await.set_outcome(root, outcome, failure))
     }
 
     async fn latest_slot(&self) -> Option<u64> {
@@ -376,6 +395,29 @@ mod tests {
         assert_eq!(reloaded.latest_slot().await, Some(200));
 
         let _ = tokio::fs::remove_dir_all(&dir).await;
+    }
+
+    #[tokio::test]
+    async fn records_failure_reason_and_error() {
+        let store = MemoryStatusStore::new(0);
+        store.record(record(300, "0xroot")).await.expect("record");
+        store
+            .set_outcome(
+                "0xroot",
+                Outcome::Failed,
+                Some(Failure {
+                    reason: "WitnessTimeout".to_string(),
+                    error: "witness fetch exceeded 12s".to_string(),
+                }),
+            )
+            .await
+            .expect("set outcome");
+
+        let records = store.records().await;
+        let failed = records.first().expect("one record");
+        assert_eq!(failed.outcome, Outcome::Failed);
+        assert_eq!(failed.reason.as_deref(), Some("WitnessTimeout"));
+        assert_eq!(failed.error.as_deref(), Some("witness fetch exceeded 12s"));
     }
 
     #[tokio::test]

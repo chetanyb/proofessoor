@@ -165,8 +165,15 @@ async fn run_status(args: StatusArgs) -> Result<()> {
     for record in &records {
         let fmt_ms =
             |value: Option<u64>| value.map_or_else(|| "-".to_string(), |ms| format!("{ms}ms"));
+        // Only the short reason category goes inline; the free-form error text
+        // would blow out the column layout and stays in the API and status.json.
+        let failure = record
+            .reason
+            .as_deref()
+            .map(|reason| format!("  {reason}"))
+            .unwrap_or_default();
         println!(
-            "{:<10} {:<10} {:<9} {:>8} {:>8} {:>8}  {}",
+            "{:<10} {:<10} {:<9} {:>8} {:>8} {:>8}  {}{}",
             record.slot,
             record.execution_block_number,
             format!("{:?}", record.outcome).to_lowercase(),
@@ -174,6 +181,7 @@ async fn run_status(args: StatusArgs) -> Result<()> {
             fmt_ms(record.completion_ms()),
             fmt_ms(record.end_to_end_ms()),
             record.new_payload_request_root,
+            failure,
         );
     }
     Ok(())
