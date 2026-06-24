@@ -4,6 +4,7 @@
 //! distinct from zkBoost's own proving dashboard.
 
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
@@ -14,6 +15,7 @@ use axum::routing::get;
 use axum::{Json, Router};
 use metrics_exporter_prometheus::PrometheusHandle;
 use serde::Serialize;
+use tower_http::services::{ServeDir, ServeFile};
 
 use crate::status::{Outcome, StatusStore};
 
@@ -24,18 +26,26 @@ struct AppState {
     store: Arc<dyn StatusStore>,
 }
 
-/// Serves health, metrics, and the dashboard API on `addr` until the task is cancelled.
+/// Serves health, metrics, the dashboard API, and (optionally) the dashboard
+/// assets on `addr` until the task is cancelled.
 pub async fn serve(
     addr: SocketAddr,
     metrics: PrometheusHandle,
     store: Arc<dyn StatusStore>,
+    ui_dir: Option<PathBuf>,
 ) -> Result<()> {
-    let app = Router::new()
+    let mut app = Router::new()
         .route("/health", get(health))
         .route("/metrics", get(render_metrics))
         .route("/api/blocks", get(blocks))
         .route("/api/status", get(status))
         .with_state(AppState { metrics, store });
+
+    // Serve the built dashboard at `/`, falling back to index.html for SPA routes.
+    if let Some(dir) = ui_dir {
+        let index = dir.join("index.html");
+        app = app.fallback_service(ServeDir::new(dir).fallback(ServeFile::new(index)));
+    }
 
     let listener = tokio::net::TcpListener::bind(addr)
         .await

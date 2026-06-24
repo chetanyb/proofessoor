@@ -142,6 +142,10 @@ pub struct StreamArgs {
     /// (e.g. 127.0.0.1:9090).
     #[arg(long)]
     pub http_addr: Option<SocketAddr>,
+
+    /// Directory of built dashboard assets to serve at / (e.g. frontend/dist).
+    #[arg(long)]
+    pub ui_dir: Option<PathBuf>,
 }
 
 /// Arguments for `proofessoor check`.

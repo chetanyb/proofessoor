@@ -71,7 +71,12 @@ pub async fn run(args: StreamArgs) -> Result<()> {
         Some(addr) => {
             let handle = crate::metrics::install()?;
             info!(%addr, "serving health, metrics, and the dashboard API");
-            Some(tokio::spawn(crate::web::serve(addr, handle, store.clone())))
+            Some(tokio::spawn(crate::web::serve(
+                addr,
+                handle,
+                store.clone(),
+                args.ui_dir.clone(),
+            )))
         }
         None => None,
     };
