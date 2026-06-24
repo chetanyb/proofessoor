@@ -1,8 +1,23 @@
 @import 'tailwindcss';
-@import '@skeletonlabs/skeleton';
-@import '@skeletonlabs/skeleton/themes/cerberus';
 
-/* Truncated hashes and numeric columns read better in a monospace font. */
+/* Palette derived from the mascot: */
+@theme {
+  --color-ink: #14121c;
+  --color-slate: #201c2e;
+  --color-line: #2e2a3d;
+  --color-chalk: #ece8f4;
+  --color-violet: #8b6df6;
+  --color-spark: #3fe0c5;
+  --color-ember: #fb5775;
+  --color-gold: #f4b53f;
+}
+
+body {
+  font-family: 'Space Grotesk', system-ui, sans-serif;
+}
+
+/* The data (roots, slots, ms) is the texture of this tool — give it a real mono. */
 .mono {
-  font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  font-family: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+  font-variant-numeric: tabular-nums;
 }
