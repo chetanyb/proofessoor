@@ -300,7 +300,9 @@ async fn handle_proof_event(
             if !store.seen(&root_hex).await {
                 return Ok(());
             }
-            let duration_ms = store.set_outcome(&root_hex, Outcome::Complete).await?;
+            let duration_ms = store
+                .set_outcome(&root_hex, Outcome::Complete, None)
+                .await?;
             let proof_type = complete.proof_type.to_string();
             counter!(PROOF_COMPLETIONS, "proof_type" => proof_type.clone()).increment(1);
             gauge!(INFLIGHT_REQUESTS).decrement(1.0);
@@ -324,9 +326,11 @@ async fn handle_proof_event(
             if !store.seen(&root_hex).await {
                 return Ok(());
             }
-            store.set_outcome(&root_hex, Outcome::Failed).await?;
             let proof_type = failure.proof_type.to_string();
             let reason = format!("{:?}", failure.reason);
+            store
+                .set_outcome(&root_hex, Outcome::Failed, Some(reason.clone()))
+                .await?;
             counter!(PROOF_FAILURES, "proof_type" => proof_type, "reason" => reason).increment(1);
             gauge!(INFLIGHT_REQUESTS).decrement(1.0);
             warn!(

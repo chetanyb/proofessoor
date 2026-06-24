@@ -42,6 +42,9 @@ pub struct BlockRecord {
     pub proof_types: Vec<String>,
     /// Latest known outcome.
     pub outcome: Outcome,
+    /// Failure reason (e.g. `WitnessTimeout`), set when the outcome is `Failed`.
+    #[serde(default)]
+    pub reason: Option<String>,
     /// Unix milliseconds when the block was discovered (processing started).
     #[serde(default)]
     pub observed_at_ms: u64,
@@ -69,6 +72,7 @@ impl BlockRecord {
             new_payload_request_root,
             proof_types,
             outcome: Outcome::Sent,
+            reason: None,
             observed_at_ms,
             requested_at_ms: now_ms(),
             resolved_at_ms: None,
@@ -102,9 +106,14 @@ pub trait StatusStore: Send + Sync {
     /// Records (or replaces) a request record.
     async fn record(&self, record: BlockRecord) -> Result<()>;
 
-    /// Updates the outcome of a recorded request, returning its request-to-resolution
-    /// duration in milliseconds if the record existed.
-    async fn set_outcome(&self, root: &str, outcome: Outcome) -> Result<Option<u64>>;
+    /// Updates the outcome (and failure reason, if any) of a recorded request,
+    /// returning its request-to-resolution duration in milliseconds if present.
+    async fn set_outcome(
+        &self,
+        root: &str,
+        outcome: Outcome,
+        reason: Option<String>,
+    ) -> Result<Option<u64>>;
 
     /// The highest slot recorded so far, if any.
     async fn latest_slot(&self) -> Option<u64>;
@@ -137,10 +146,11 @@ impl State {
             .insert(record.new_payload_request_root.clone(), record);
     }
 
-    fn set_outcome(&mut self, root: &str, outcome: Outcome) -> Option<u64> {
+    fn set_outcome(&mut self, root: &str, outcome: Outcome, reason: Option<String>) -> Option<u64> {
         let record = self.records.get_mut(root)?;
         let now = now_ms();
         record.outcome = outcome;
+        record.reason = reason;
         record.resolved_at_ms = Some(now);
         Some(now.saturating_sub(record.requested_at_ms))
     }
@@ -227,9 +237,14 @@ impl StatusStore for JsonStatusStore {
         self.persist(&state).await
     }
 
-    async fn set_outcome(&self, root: &str, outcome: Outcome) -> Result<Option<u64>> {
+    async fn set_outcome(
+        &self,
+        root: &str,
+        outcome: Outcome,
+        reason: Option<String>,
+    ) -> Result<Option<u64>> {
         let mut state = self.state.lock().await;
-        let duration = state.set_outcome(root, outcome);
+        let duration = state.set_outcome(root, outcome, reason);
         self.persist(&state).await?;
         Ok(duration)
     }
@@ -273,8 +288,13 @@ impl StatusStore for MemoryStatusStore {
         Ok(())
     }
 
-    async fn set_outcome(&self, root: &str, outcome: Outcome) -> Result<Option<u64>> {
-        Ok(self.state.lock().await.set_outcome(root, outcome))
+    async fn set_outcome(
+        &self,
+        root: &str,
+        outcome: Outcome,
+        reason: Option<String>,
+    ) -> Result<Option<u64>> {
+        Ok(self.state.lock().await.set_outcome(root, outcome, reason))
     }
 
     async fn latest_slot(&self) -> Option<u64> {
@@ -346,7 +366,7 @@ mod tests {
         let store = JsonStatusStore::load(&dir, 0).await.expect("load");
         store.record(record(200, "0xroot")).await.expect("record");
         store
-            .set_outcome("0xroot", Outcome::Complete)
+            .set_outcome("0xroot", Outcome::Complete, None)
             .await
             .expect("set outcome");
 
