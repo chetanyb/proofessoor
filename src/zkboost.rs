@@ -143,7 +143,7 @@ impl Client {
             };
             let event = event.context("error reading the zkBoost proof event stream")?;
 
-            // Ignore events for proof types we did not request.
+            // Ignore events for proof types that were not requested.
             if !remaining.remove(&event.proof_type()) {
                 continue;
             }

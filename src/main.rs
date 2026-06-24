@@ -77,8 +77,8 @@ async fn run_request(args: RequestArgs) -> Result<()> {
         .request_proof(&payload_request, &proof_types)
         .await?;
 
-    // The server recomputes the root from the SSZ body we sent; a mismatch means
-    // our encoding disagrees with zkBoost's and the request is not what we built.
+    // The server recomputes the root from the submitted SSZ body; a mismatch means
+    // the local encoding disagrees with zkBoost's and the request is not the one built.
     if server_root != local_root {
         anyhow::bail!(
             "new_payload_request_root mismatch: local {local_root} != server {server_root}"
