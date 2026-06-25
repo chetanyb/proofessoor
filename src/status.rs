@@ -27,12 +27,28 @@ pub enum Outcome {
     Failed,
 }
 
+/// Which side a failure occurred on.
+///
+/// Submit-stage failures originate on the requestor side and may be retried;
+/// proving-stage failures originate at zkBoost, which owns their coordination,
+/// so they are not resubmitted here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FailureStage {
+    /// Failed before or at submission to zkBoost (requestor side).
+    Submit,
+    /// Failed during proving at zkBoost (prover side).
+    Proving,
+}
+
 /// Structured detail for a failed proof, recorded for display and debugging.
 ///
 /// `reason` is the low-cardinality category safe to use as a metric label;
 /// `error` is free-form text and belongs only on the record, never as a label.
 #[derive(Debug, Clone)]
 pub struct Failure {
+    /// Which side the failure occurred on.
+    pub stage: FailureStage,
     /// Failure category (e.g. `WitnessTimeout`).
     pub reason: String,
     /// Human-readable detail about the specific failure.
@@ -54,6 +70,9 @@ pub struct BlockRecord {
     pub proof_types: Vec<String>,
     /// Latest known outcome.
     pub outcome: Outcome,
+    /// Which side the failure occurred on, set when the outcome is `Failed`.
+    #[serde(default)]
+    pub stage: Option<FailureStage>,
     /// Failure category (e.g. `WitnessTimeout`), set when the outcome is `Failed`.
     #[serde(default)]
     pub reason: Option<String>,
@@ -87,6 +106,7 @@ impl BlockRecord {
             new_payload_request_root,
             proof_types,
             outcome: Outcome::Sent,
+            stage: None,
             reason: None,
             error: None,
             observed_at_ms,
@@ -167,6 +187,7 @@ impl State {
         let now = now_ms();
         record.outcome = outcome;
         if let Some(failure) = failure {
+            record.stage = Some(failure.stage);
             record.reason = Some(failure.reason);
             record.error = Some(failure.error);
         }
@@ -406,6 +427,7 @@ mod tests {
                 "0xroot",
                 Outcome::Failed,
                 Some(Failure {
+                    stage: FailureStage::Proving,
                     reason: "WitnessTimeout".to_string(),
                     error: "witness fetch exceeded 12s".to_string(),
                 }),
@@ -416,6 +438,7 @@ mod tests {
         let records = store.records().await;
         let failed = records.first().expect("one record");
         assert_eq!(failed.outcome, Outcome::Failed);
+        assert_eq!(failed.stage, Some(FailureStage::Proving));
         assert_eq!(failed.reason.as_deref(), Some("WitnessTimeout"));
         assert_eq!(failed.error.as_deref(), Some("witness fetch exceeded 12s"));
     }

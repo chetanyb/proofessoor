@@ -27,7 +27,9 @@ use crate::metrics::{
     PROOF_REQUEST_FAILURES, PROOF_REQUESTS, REQUEST_DURATION, REQUEST_STAGE_DURATION,
 };
 use crate::request;
-use crate::status::{self, BlockRecord, JsonStatusStore, MemoryStatusStore, Outcome, StatusStore};
+use crate::status::{
+    self, BlockRecord, FailureStage, JsonStatusStore, MemoryStatusStore, Outcome, StatusStore,
+};
 use crate::zkboost::{self, ProofEvent};
 
 /// Delay before reconnecting after an event stream drops.
@@ -221,16 +223,50 @@ async fn process_block(
     let server_root = match zkboost.request_proof(&payload_request, proof_types).await {
         Ok(root) => root,
         Err(error) => {
+            // Record the submit failure (often transient) rather than dropping it,
+            // so the attempt shows as a failure instead of an absent slot. zkBoost
+            // owns retry coordination, so the request is not auto-resubmitted here.
             counter!(PROOF_REQUEST_FAILURES).increment(1);
-            return Err(error);
+            store
+                .record(failed_record(
+                    &fetched,
+                    payload_request.block_number(),
+                    root_hex.clone(),
+                    proof_types,
+                    observed_at_ms,
+                    "SubmitError",
+                    format!("{error:#}"),
+                ))
+                .await?;
+            warn!(slot = fetched.slot(), root = %local_root, %error, "proof submission failed");
+            return Ok(());
         }
     };
     histogram!(REQUEST_STAGE_DURATION, "stage" => "submit")
         .record(submit_start.elapsed().as_secs_f64());
     if server_root != local_root {
-        anyhow::bail!(
-            "new_payload_request_root mismatch: local {local_root} != server {server_root}"
+        // The server recomputed a different root, so this request lives under a
+        // root with no incoming proof events; record it instead of leaving it to
+        // linger unresolved.
+        counter!(PROOF_REQUEST_FAILURES).increment(1);
+        store
+            .record(failed_record(
+                &fetched,
+                payload_request.block_number(),
+                root_hex.clone(),
+                proof_types,
+                observed_at_ms,
+                "RootMismatch",
+                format!("local {local_root} != server {server_root}"),
+            ))
+            .await?;
+        warn!(
+            slot = fetched.slot(),
+            local_root = %local_root,
+            server_root = %server_root,
+            "new_payload_request_root mismatch"
         );
+        return Ok(());
     }
 
     latest_requested.fetch_max(fetched.slot(), Ordering::Relaxed);
@@ -259,6 +295,77 @@ async fn process_block(
         "proof requested"
     );
     Ok(())
+}
+
+/// Builds a `Failed` record for a request that never reached the proving stage,
+/// so the attempt is visible as a failure rather than lost as an absent slot.
+fn failed_record(
+    fetched: &beacon::FetchedBlock,
+    block_number: u64,
+    root_hex: String,
+    proof_types: &[ProofType],
+    observed_at_ms: u64,
+    reason: &str,
+    error: String,
+) -> BlockRecord {
+    let record = BlockRecord::new(
+        fetched.slot(),
+        fetched.root().to_string(),
+        block_number,
+        root_hex,
+        proof_types.iter().map(|p| p.as_str().to_string()).collect(),
+        observed_at_ms,
+    );
+    // Pre-submit failures all originate on the requestor side, so they are
+    // tagged as the submit stage.
+    mark_failed(record, FailureStage::Submit, reason, error)
+}
+
+/// Marks a record failed with the given stage, reason, and detail, stamping resolution.
+fn mark_failed(
+    mut record: BlockRecord,
+    stage: FailureStage,
+    reason: &str,
+    error: String,
+) -> BlockRecord {
+    record.outcome = Outcome::Failed;
+    record.stage = Some(stage);
+    record.reason = Some(reason.to_string());
+    record.error = Some(error);
+    record.resolved_at_ms = Some(status::now_ms());
+    record
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mark_failed_sets_outcome_and_detail() {
+        let base = BlockRecord::new(
+            100,
+            "0xbeacon".to_string(),
+            99,
+            "0xroot".to_string(),
+            vec!["reth-zisk".to_string()],
+            1_000,
+        );
+        let failed = mark_failed(
+            base,
+            FailureStage::Submit,
+            "SubmitError",
+            "connection refused".to_string(),
+        );
+
+        assert_eq!(failed.outcome, Outcome::Failed);
+        assert_eq!(failed.stage, Some(FailureStage::Submit));
+        assert_eq!(failed.reason.as_deref(), Some("SubmitError"));
+        assert_eq!(failed.error.as_deref(), Some("connection refused"));
+        assert!(failed.resolved_at_ms.is_some());
+        // Identity fields from the base record are preserved.
+        assert_eq!(failed.slot, 100);
+        assert_eq!(failed.new_payload_request_root, "0xroot");
+    }
 }
 
 /// Observes proof events, recording outcomes and running artifact actions.
@@ -337,6 +444,7 @@ async fn handle_proof_event(
                     &root_hex,
                     Outcome::Failed,
                     Some(status::Failure {
+                        stage: FailureStage::Proving,
                         reason,
                         error: failure.error.clone(),
                     }),
