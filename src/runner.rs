@@ -336,38 +336,6 @@ fn mark_failed(
     record
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn mark_failed_sets_outcome_and_detail() {
-        let base = BlockRecord::new(
-            100,
-            "0xbeacon".to_string(),
-            99,
-            "0xroot".to_string(),
-            vec!["reth-zisk".to_string()],
-            1_000,
-        );
-        let failed = mark_failed(
-            base,
-            FailureStage::Submit,
-            "SubmitError",
-            "connection refused".to_string(),
-        );
-
-        assert_eq!(failed.outcome, Outcome::Failed);
-        assert_eq!(failed.stage, Some(FailureStage::Submit));
-        assert_eq!(failed.reason.as_deref(), Some("SubmitError"));
-        assert_eq!(failed.error.as_deref(), Some("connection refused"));
-        assert!(failed.resolved_at_ms.is_some());
-        // Identity fields from the base record are preserved.
-        assert_eq!(failed.slot, 100);
-        assert_eq!(failed.new_payload_request_root, "0xroot");
-    }
-}
-
 /// Observes proof events, recording outcomes and running artifact actions.
 ///
 /// Reconnects after a transient stream drop; runs until aborted on shutdown.
@@ -461,4 +429,36 @@ async fn handle_proof_event(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mark_failed_sets_outcome_and_detail() {
+        let base = BlockRecord::new(
+            100,
+            "0xbeacon".to_string(),
+            99,
+            "0xroot".to_string(),
+            vec!["reth-zisk".to_string()],
+            1_000,
+        );
+        let failed = mark_failed(
+            base,
+            FailureStage::Submit,
+            "SubmitError",
+            "connection refused".to_string(),
+        );
+
+        assert_eq!(failed.outcome, Outcome::Failed);
+        assert_eq!(failed.stage, Some(FailureStage::Submit));
+        assert_eq!(failed.reason.as_deref(), Some("SubmitError"));
+        assert_eq!(failed.error.as_deref(), Some("connection refused"));
+        assert!(failed.resolved_at_ms.is_some());
+        // Identity fields from the base record are preserved.
+        assert_eq!(failed.slot, 100);
+        assert_eq!(failed.new_payload_request_root, "0xroot");
+    }
 }
