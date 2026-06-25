@@ -5,9 +5,7 @@
 //! installed and the emit calls are cheap no-ops. The HTTP surface that renders
 //! these lives in [`crate::web`].
 
-use ::metrics::{
-    Unit, counter, describe_counter, describe_gauge, describe_histogram, gauge,
-};
+use ::metrics::{Unit, counter, describe_counter, describe_gauge, describe_histogram, gauge};
 use anyhow::{Context, Result};
 use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusHandle};
 
@@ -80,7 +78,10 @@ fn register() {
     describe_gauge!(INFLIGHT_REQUESTS, "Currently outstanding proof jobs");
     describe_gauge!(LATEST_REQUESTED_SLOT, "Highest slot requested");
     describe_gauge!(LATEST_SEEN_SLOT, "Highest slot seen from the event stream");
-    describe_gauge!(HEAD_LAG, "Slots between the latest seen and requested block");
+    describe_gauge!(
+        HEAD_LAG,
+        "Slots between the latest seen and requested block"
+    );
     describe_histogram!(
         REQUEST_DURATION,
         Unit::Seconds,

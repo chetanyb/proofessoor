@@ -182,7 +182,12 @@ impl State {
             .insert(record.new_payload_request_root.clone(), record);
     }
 
-    fn set_outcome(&mut self, root: &str, outcome: Outcome, failure: Option<Failure>) -> Option<u64> {
+    fn set_outcome(
+        &mut self,
+        root: &str,
+        outcome: Outcome,
+        failure: Option<Failure>,
+    ) -> Option<u64> {
         let record = self.records.get_mut(root)?;
         let now = now_ms();
         record.outcome = outcome;
