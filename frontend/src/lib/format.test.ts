@@ -27,6 +27,7 @@ function block(
     new_payload_request_root: `0x${slot.toString(16).padStart(64, '0')}`,
     proof_types: ['reth-zisk'],
     outcome,
+    stage: null,
     reason: null,
     error: null,
     observed_at_ms: observed,

@@ -65,13 +65,23 @@
       </div>
     </div>
 
-    <!-- Failure detail: the free-form error text, shown only here where it fits. -->
-    {#if record.outcome === 'failed' && record.error}
+    <!-- Failure detail: stage, reason, and the free-form error text (which fits here). -->
+    {#if record.outcome === 'failed'}
       <div class="mt-5">
-        <p class="text-[11px]/4 text-chalk/40 uppercase">failure detail</p>
-        <p class="mono mt-1 rounded-md border border-ember/30 bg-ember/8 px-3 py-2 text-xs/5 text-ember/90">
-          {record.error}
-        </p>
+        <p class="text-[11px]/4 text-chalk/40 uppercase">failure</p>
+        <div class="mono mt-2 flex flex-wrap items-center gap-2 text-xs/5">
+          <span class="rounded-md bg-ember/12 px-2 py-1 text-ember">{record.reason ?? 'unknown'}</span>
+          {#if record.stage === 'submit'}
+            <span class="rounded-md bg-chalk/10 px-2 py-1 text-chalk/60">requestor side</span>
+          {:else if record.stage === 'proving'}
+            <span class="rounded-md bg-chalk/10 px-2 py-1 text-chalk/60">zkBoost · prover side</span>
+          {/if}
+        </div>
+        {#if record.error}
+          <p class="mono mt-2 rounded-md border border-ember/30 bg-ember/8 px-3 py-2 text-xs/5 text-ember/90">
+            {record.error}
+          </p>
+        {/if}
       </div>
     {/if}
 

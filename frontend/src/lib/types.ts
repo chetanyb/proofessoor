@@ -10,6 +10,8 @@ export interface BlockRecord {
   new_payload_request_root: string
   proof_types: string[]
   outcome: Outcome
+  /** Which side a failure occurred on; present when failed. */
+  stage: 'submit' | 'proving' | null
   /** Short failure category (e.g. WitnessTimeout); present when failed. */
   reason: string | null
   /** Free-form failure detail; present when failed. */
