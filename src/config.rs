@@ -5,6 +5,7 @@
 
 use std::fmt;
 use std::net::SocketAddr;
+use std::num::NonZeroUsize;
 use std::path::PathBuf;
 
 use clap::{Args, Parser, Subcommand};
@@ -115,8 +116,8 @@ pub struct StreamArgs {
     pub proof_types: Vec<ProofTypeName>,
 
     /// Maximum number of concurrent proof submissions. Conservative default of 1.
-    #[arg(long, default_value_t = 1)]
-    pub max_inflight: usize,
+    #[arg(long, default_value_t = NonZeroUsize::MIN)]
+    pub max_inflight: NonZeroUsize,
 
     /// Save completed proofs to --out-dir.
     #[arg(long)]

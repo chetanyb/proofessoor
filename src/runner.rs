@@ -45,7 +45,7 @@ pub async fn run(args: StreamArgs) -> Result<()> {
             .map(|name| zkboost::parse_proof_type(name.as_str()))
             .collect::<Result<Vec<_>>>()?,
     );
-    let semaphore = Arc::new(Semaphore::new(args.max_inflight));
+    let semaphore = Arc::new(Semaphore::new(args.max_inflight.get()));
     let latest_requested = Arc::new(AtomicU64::new(0));
     let artifacts = Arc::new(zkboost::Artifacts {
         download: args.download,
@@ -88,7 +88,7 @@ pub async fn run(args: StreamArgs) -> Result<()> {
     let mut tasks = JoinSet::new();
 
     info!(
-        max_inflight = args.max_inflight,
+        max_inflight = args.max_inflight.get(),
         "streaming beacon block events"
     );
 
