@@ -35,8 +35,22 @@ use crate::zkboost::{self, ProofEvent};
 /// Delay before reconnecting after an event stream drops.
 const RECONNECT_DELAY: Duration = Duration::from_secs(2);
 
+/// Stream persists one outcome per block, so it cannot represent distinct
+/// results for several proof types on the same block. Restrict stream mode to a
+/// single proof type until status is tracked per proof; `request` handles many.
+fn ensure_single_proof_type(count: usize) -> Result<()> {
+    anyhow::ensure!(
+        count == 1,
+        "stream mode supports exactly one proof type (got {count}); multi-proof \
+         stream status needs per-proof tracking — use `request` for multiple"
+    );
+    Ok(())
+}
+
 /// Runs stream mode: request proofs for new non-optimistic beacon blocks.
 pub async fn run(args: StreamArgs) -> Result<()> {
+    ensure_single_proof_type(args.proof_types.len())?;
+
     let beacon = Arc::new(beacon::Client::new(args.endpoints.beacon_rpc.clone())?);
     let zkboost = Arc::new(zkboost::Client::new(args.endpoints.zkboost_url.clone())?);
     let proof_types: Arc<Vec<ProofType>> = Arc::new(
@@ -434,6 +448,16 @@ async fn handle_proof_event(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stream_accepts_a_single_proof_type() {
+        assert!(ensure_single_proof_type(1).is_ok());
+    }
+
+    #[test]
+    fn stream_rejects_multiple_proof_types() {
+        assert!(ensure_single_proof_type(2).is_err());
+    }
 
     #[test]
     fn mark_failed_sets_outcome_and_detail() {
