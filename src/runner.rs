@@ -70,9 +70,10 @@ pub async fn run(args: StreamArgs) -> Result<()> {
     let store: Arc<dyn StatusStore> = match &args.state_dir {
         Some(dir) => {
             let store = JsonStatusStore::load(dir, args.max_history).await?;
+            let latest_slot = store.latest_slot().await;
             info!(
                 state_dir = %dir.display(),
-                latest_slot = ?store.latest_slot().await,
+                ?latest_slot,
                 "loaded request status from state directory"
             );
             Arc::new(store)
