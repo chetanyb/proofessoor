@@ -1,0 +1,17 @@
+name: Build Master
+
+# Every push to main publishes moving dev tags (never `latest`).
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    uses: ./.github/workflows/_shared-build.yaml
+    with:
+      ref: ${{ github.sha }}
+      tags: '["main","unstable"]'
+    secrets: inherit

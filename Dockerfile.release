@@ -1,0 +1,7 @@
+# CI-only image: the release workflow stages the prebuilt binary + dashboard into
+# a context dir, and this copies them into distroless. NOT a standalone build —
+# for local/dev/compose use ./Dockerfile.
+FROM gcr.io/distroless/cc-debian12:nonroot
+COPY proofessoor /usr/local/bin/proofessoor
+COPY dist /srv/ui
+ENTRYPOINT ["/usr/local/bin/proofessoor"]

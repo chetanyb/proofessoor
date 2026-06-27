@@ -1,0 +1,131 @@
+name: Reusable build
+
+# Builds the dashboard once (arch-independent), the binary natively per arch,
+# assembles a per-arch image from Dockerfile.release, and merges them into
+# one multi-arch manifest per final tag.
+on:
+  workflow_call:
+    inputs:
+      ref:
+        description: "Exact git ref/SHA to build."
+        default: ""
+        required: false
+        type: string
+      tags:
+        description: "Final image tags as a JSON array, e.g. '[\"v0.1.0\",\"latest\"]'."
+        required: true
+        type: string
+    secrets:
+      DOCKERHUB_USERNAME:
+        required: true
+      DOCKERHUB_TOKEN:
+        required: true
+
+# Image repo is the `DOCKER_REPOSITORY` repo variable, e.g. "myorg/proofessoor".
+permissions:
+  contents: read
+
+jobs:
+  # Build the dashboard once and share it.
+  frontend:
+    name: Build dashboard
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.10"
+      - uses: actions/cache@v4
+        with:
+          path: frontend/node_modules
+          key: bun-${{ runner.os }}-${{ hashFiles('frontend/bun.lock') }}
+          restore-keys: bun-${{ runner.os }}-
+      - name: Build
+        working-directory: frontend
+        run: |
+          bun install --frozen-lockfile
+          bun run build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dashboard
+          path: frontend/dist
+
+  build:
+    name: Build ${{ matrix.arch }} image
+    needs: frontend
+    strategy:
+      matrix:
+        include:
+          - { runner: ubuntu-latest, arch: amd64 }
+          - { runner: ubuntu-24.04-arm, arch: arm64 }
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Resolve image + sha
+        id: vars
+        run: |
+          echo "image=${{ vars.DOCKER_REPOSITORY }}" >> "$GITHUB_OUTPUT"
+          echo "sha=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+
+      # Binary, native (toolchain pinned by rust-toolchain.toml). Default ISA.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.arch }}
+      - name: Build binary
+        run: cargo build --release --locked
+
+      # Stage the prebuilt binary + the shared dashboard into a clean, tiny build
+      # context so the stub's COPYs work (the repo .dockerignore excludes both).
+      - uses: actions/download-artifact@v4
+        with:
+          name: dashboard
+          path: ctx/dist
+      - name: Stage binary
+        run: cp target/release/proofessoor ctx/proofessoor
+
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: ctx
+          file: Dockerfile.release
+          platforms: linux/${{ matrix.arch }}
+          push: true
+          tags: ${{ steps.vars.outputs.image }}:${{ steps.vars.outputs.sha }}-${{ matrix.arch }}
+
+  manifest:
+    name: Merge multi-arch manifest
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+      - name: Resolve image + sha
+        id: vars
+        run: |
+          echo "image=${{ vars.DOCKER_REPOSITORY }}" >> "$GITHUB_OUTPUT"
+          echo "sha=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Create manifests
+        env:
+          IMAGE: ${{ steps.vars.outputs.image }}
+          SHA: ${{ steps.vars.outputs.sha }}
+          TAGS: ${{ inputs.tags }}
+        run: |
+          for tag in $(echo "$TAGS" | jq -r '.[]'); do
+            docker buildx imagetools create -t "$IMAGE:$tag" \
+              "$IMAGE:$SHA-amd64" "$IMAGE:$SHA-arm64"
+          done
