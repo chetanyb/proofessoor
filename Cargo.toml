@@ -13,6 +13,15 @@ async-trait = "0.1"
 axum = "0.8"
 clap = { version = "4.5", features = ["derive", "env"] }
 futures = "0.3"
+# Must resolve to the same lighthouse source as zkboost-types, or the protocol
+# types split into two incompatible copies (a build error). Both use
+# branch = "unstable", and Cargo.lock pins the exact commit — the rev zkBoost
+# v0.8.0 and the deployed prover are built against. Two distinct cautions:
+#   - don't pin this to a rev/patch on our side alone: with zkBoost on `branch`
+#     it splits the types (use the same source on both sides instead);
+#   - don't `cargo update` past the pinned commit: the NewPayloadRequest encoding
+#     could drift from the prover and roots would mismatch at runtime.
+# --locked builds hold the pinned commit.
 lighthouse_types = { git = "https://github.com/sigp/lighthouse", branch = "unstable", package = "types" }
 metrics = "0.24"
 metrics-exporter-prometheus = "0.16"
@@ -27,8 +36,8 @@ tower-http = { version = "0.6", features = ["fs"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 url = "2.5"
-zkboost-client = { path = "../../eth-act/zkboost/crates/client" }
-zkboost-types = { path = "../../eth-act/zkboost/crates/types" }
+zkboost-client = { git = "https://github.com/eth-act/zkboost", tag = "v0.8.0" }
+zkboost-types = { git = "https://github.com/eth-act/zkboost", tag = "v0.8.0" }
 
 [lints.clippy]
 unwrap_used = "deny"

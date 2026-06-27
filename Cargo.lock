@@ -4498,6 +4498,7 @@ dependencies = [
 [[package]]
 name = "zkboost-client"
 version = "0.8.0"
+source = "git+https://github.com/eth-act/zkboost?tag=v0.8.0#b4ecbdedbe7f61cade813f0c1506d2066bf61256"
 dependencies = [
  "async-stream",
  "bytes",
@@ -4515,6 +4516,7 @@ dependencies = [
 [[package]]
 name = "zkboost-types"
 version = "0.8.0"
+source = "git+https://github.com/eth-act/zkboost?tag=v0.8.0#b4ecbdedbe7f61cade813f0c1506d2066bf61256"
 dependencies = [
  "ere-catalog",
  "ethereum_ssz",
