@@ -1,0 +1,87 @@
+# proofessoor + zkboost + ere — real ZisK proving on a single multi-GPU box.
+#
+# One proof type (reth-zisk) across 4 GPUs = ONE ere-server handed devices 0-3.
+# That's the single-machine, multi-GPU pattern (a `cluster` backend is for
+# distributed/multi-machine proving, not this).
+#
+# Prerequisites:
+#   - NVIDIA drivers + NVIDIA Container Toolkit (Docker `--gpus` / device reservations)
+#   - An EL RPC that serves debug_executionWitnessByBlockHash for the blocks you
+#     prove (e.g. a hoodi reth supernode). Set el_endpoint in zkboost.toml.
+#
+# Run (published proofessoor image):
+#   docker compose up -d
+# Run (build proofessoor from source):
+#   docker compose -f docker-compose.yml -f docker-compose.local.yml up -d
+#
+#   open http://localhost:9100           # proofessoor dashboard
+#   open http://localhost:3000/dashboard # zkboost built-in dashboard
+
+name: proofessoor-gpu
+
+services:
+  # Real ZisK prover. ERE_ZISK_SETUP_ON_INIT makes it precompute setup on boot,
+  # so it can take several minutes before it serves proofs. zkBoost and proofessoor
+  # depend_on it for start order only — they tolerate it not being ready yet.
+  ere-server-reth-zisk:
+    image: ghcr.io/eth-act/ere/ere-server-zisk:v0.12.1-cuda
+    command:
+      - --port
+      - "3000"
+      - --elf-url
+      - https://github.com/eth-act/ere-guests/releases/download/v0.12.1/stateless-validator-reth-zisk.elf
+      - gpu
+    environment:
+      RUST_LOG: "info,asm_runner=warn,executor=warn,mem_planner_cpp=warn,proofman=warn,rom_setup=warn,sm_rom=warn,zisk=warn"
+      ERE_ZISK_SETUP_ON_INIT: "1"
+    shm_size: "32gb"
+    ulimits:
+      memlock: -1
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["0", "1", "2", "3"] # the 4× RTX 5090
+              capabilities: [gpu]
+
+  zkboost:
+    image: ghcr.io/eth-act/zkboost/zkboost:0.8.0
+    command: ["--config", "/config/zkboost.toml"]
+    environment:
+      RUST_LOG: "info,zkboost=debug"
+    volumes:
+      - ./zkboost.toml:/config/zkboost.toml:ro
+    ports:
+      - "3000:3000" # zkboost API + /dashboard
+    depends_on:
+      - ere-server-reth-zisk
+
+  proofessoor:
+    # Published image by default; docker-compose.local.yml swaps this for a
+    # from-source build. Pin a version by setting PROOFESSOOR_IMAGE.
+    image: ${PROOFESSOOR_IMAGE:-docker.io/chethack/proofessoor:latest}
+    command:
+      - stream
+      - --beacon-rpc
+      - ${BEACON_RPC:?set BEACON_RPC to your beacon API}
+      - --zkboost-url
+      - http://zkboost:3000
+      - --proof-types
+      - reth-zisk
+      - --verify
+      - --state-dir
+      - /state
+      - --http-addr
+      - 0.0.0.0:9100
+      - --ui-dir
+      - /srv/ui
+    volumes:
+      - proofessoor-state:/state
+    ports:
+      - "9100:9100" # proofessoor dashboard
+    depends_on:
+      - zkboost
+
+volumes:
+  proofessoor-state:

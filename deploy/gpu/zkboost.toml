@@ -1,0 +1,20 @@
+# zkboost — real ZisK proving via the ere-server, with the built-in dashboard on.
+port = 3000
+
+# REQUIRED — an EL JSON-RPC that serves debug_executionWitnessByBlockHash for the
+# blocks you prove (e.g. a hoodi reth supernode). zkboost fetches the witness here
+# before handing it to the prover; a rate-limited public RPC causes WitnessTimeout.
+el_endpoint = "http://CHANGE-ME-hoodi-el:8545"
+# chain_config_path = "/config/hoodi_chain_config.json"  # if the EL has no debug_chainConfig
+witness_timeout_secs = 12
+
+[dashboard]
+enabled = true          # served at http://localhost:3000/dashboard (off by default)
+retention = 256
+
+# Single proof type → the ere-server above (which owns GPUs 0-3).
+[[zkvm]]
+kind = "ere"
+proof_type = "reth-zisk"
+endpoint = "http://ere-server-reth-zisk:3000"
+proof_timeout_secs = 600
