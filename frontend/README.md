@@ -3,8 +3,8 @@
 The requestor-view dashboard for proofessoor: outcome tiles and a live
 proof-request table with per-block prep and end-to-end timing.
 
-Vite + Svelte 5 + [Skeleton](https://www.skeleton.dev/) (cerberus theme) + Tailwind v4.
-Built with [bun](https://bun.sh/); dependency versions are pinned exact via `bun.lock`.
+Vite + Svelte 5 + Tailwind v4. Built with [bun](https://bun.sh/); dependency
+versions are pinned exact via `bun.lock`.
 
 ## Develop
 
