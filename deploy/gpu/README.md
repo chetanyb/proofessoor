@@ -13,36 +13,56 @@ a second `[[zkvm]]` block pointing at it (give it different `device_ids`).
 ## Prerequisites
 
 - NVIDIA drivers + **NVIDIA Container Toolkit** (so Docker can reserve GPUs).
-- An **EL RPC** that serves `debug_executionWitnessByBlockHash` for the blocks
-  you prove (e.g. a hoodi reth supernode). Put it in `zkboost.toml` → `el_endpoint`.
-  A rate-limited public RPC will cause `WitnessTimeout` failures.
+- Two endpoints on the network you want to prove (e.g. hoodi):
+  - an **EL RPC** that serves `debug_executionWitnessByBlockHash` (e.g. a hoodi
+    reth supernode) — zkBoost fetches the witness here; a rate-limited public RPC
+    causes `WitnessTimeout`.
+  - a **Beacon API** — proofessoor reads blocks here.
 
-## Run
+## Quick start
 
 ```bash
-# 1. set el_endpoint in zkboost.toml
-# 2. point at your beacon API: export BEACON_RPC=<your beacon RPC>
+# 1. set your beacon API (and optionally PROOFESSOOR_PORT)
+cp .env.example .env
+#    then edit .env -> BEACON_RPC
 
-# published proofessoor image (set PROOFESSOOR_IMAGE or edit the default in the file):
-docker compose up -d
+# 2. set your EL endpoint in zkboost.toml -> el_endpoint
 
-# or build proofessoor from source:
+# 3. build proofessoor from source and start the stack
 docker compose -f docker-compose.yml -f docker-compose.local.yml up -d
 ```
 
+Once the image is published, the base file alone (`docker compose up -d`) pulls
+it instead of building (set `PROOFESSOOR_IMAGE` to pin a version).
+
 | What | URL |
 | --- | --- |
-| proofessoor dashboard | http://localhost:9100 |
+| proofessoor dashboard | http://localhost:19100 |
 | zkboost dashboard | http://localhost:3000/dashboard |
+
+## Chain config
+
+zkBoost gets the chain config straight from your EL via `debug_chainConfig`, so
+with a proper EL there's nothing to set — whatever chain the EL runs is what gets
+proved. Some public RPCs don't serve that method; if
+yours doesn't, generate the config for your network and point zkBoost at it
+(hoodi shown — swap `hoodi` for your network):
+
+```bash
+curl -s https://raw.githubusercontent.com/eth-clients/hoodi/main/metadata/genesis.json \
+  | jq '.config' > hoodi_chain_config.json
+```
+
+then uncomment `chain_config_path` in `zkboost.toml` and its mount in
+`docker-compose.yml`. Regenerate it if the network schedules a new fork.
 
 ## Notes
 
 - **First boot is slow.** `ERE_ZISK_SETUP_ON_INIT=1` makes the prover precompute
-  setup before it serves proofs — expect several minutes. The stack stays up while
-  it boots: zkBoost retries witness fetches within a request, but proofessoor does
-  not re-submit a failed block — it just keeps requesting new ones. So early blocks
-  may fail or queue until the prover is ready.
-- Image versions match zkboost `v0.8.0` (ere/ere-guests `v0.12.1`). If you bump
+  its setup before serving proofs — several minutes. The `service_healthy` gate
+  holds zkBoost/proofessoor back until it's listening, and the `ere-zisk-setup`
+  volume persists the result so later restarts skip it.
+- Image versions track zkboost `v0.8.0` (ere/ere-guests `v0.12.1`). If you bump
   zkboost, re-check the pinned ere version in zkboost's `Cargo.toml`.
-- By default `proofessoor` runs the published image (set `PROOFESSOOR_IMAGE`);
-  add `-f docker-compose.local.yml` to build it from source instead.
+- `proofessoor` builds from source via `docker-compose.local.yml`; drop that `-f`
+  to run the published image instead.

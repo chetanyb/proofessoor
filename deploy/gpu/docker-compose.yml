@@ -14,17 +14,17 @@
 # Run (build proofessoor from source):
 #   docker compose -f docker-compose.yml -f docker-compose.local.yml up -d
 #
-#   open http://localhost:9100           # proofessoor dashboard
+#   open http://localhost:19100          # proofessoor dashboard
 #   open http://localhost:3000/dashboard # zkboost built-in dashboard
 
 name: proofessoor-gpu
 
 services:
-  # Real ZisK prover. ERE_ZISK_SETUP_ON_INIT makes it precompute setup on boot,
-  # so it can take several minutes before it serves proofs. zkBoost and proofessoor
-  # depend_on it for start order only — they tolerate it not being ready yet.
+  # Real ZisK prover. ERE_ZISK_SETUP_ON_INIT precomputes the proving key on boot
+  # (slow first boot — minutes); the ere-zisk-setup volume persists it so later
+  # boots skip it. The healthcheck gates dependents until it's actually listening.
   ere-server-reth-zisk:
-    image: ghcr.io/eth-act/ere/ere-server-zisk:v0.12.1-cuda
+    image: ghcr.io/eth-act/ere/ere-server-zisk:0.12.1-cuda
     command:
       - --port
       - "3000"
@@ -37,12 +37,21 @@ services:
     shm_size: "32gb"
     ulimits:
       memlock: -1
+    volumes:
+      - ere-zisk-setup:/root/.zisk # persist the proving key so restarts skip setup
+    healthcheck:
+      # ere binds :3000 only after setup completes; gate dependents on that.
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/3000'"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 600s
     deploy:
       resources:
         reservations:
           devices:
             - driver: nvidia
-              device_ids: ["0", "1", "2", "3"] # the 4× RTX 5090
+              device_ids: ["0", "1", "2", "3"] # GPU IDs to reserve; adjust to your hardware
               capabilities: [gpu]
 
   zkboost:
@@ -52,19 +61,24 @@ services:
       RUST_LOG: "info,zkboost=debug"
     volumes:
       - ./zkboost.toml:/config/zkboost.toml:ro
+      # If your EL doesn't serve debug_chainConfig (e.g. a public RPC), generate a
+      # chain config (see README) and uncomment to load it:
+      # - ./hoodi_chain_config.json:/config/hoodi_chain_config.json:ro
     ports:
       - "3000:3000" # zkboost API + /dashboard
     depends_on:
-      - ere-server-reth-zisk
+      ere-server-reth-zisk:
+        condition: service_healthy
 
   proofessoor:
     # Published image by default; docker-compose.local.yml swaps this for a
     # from-source build. Pin a version by setting PROOFESSOOR_IMAGE.
     image: ${PROOFESSOOR_IMAGE:-docker.io/chethack/proofessoor:latest}
+    environment:
+      # proofessoor reads the beacon endpoint from this env var (set it in .env).
+      PROOFESSOOR_BEACON_RPC: ${BEACON_RPC:?set BEACON_RPC in .env to your beacon API}
     command:
       - stream
-      - --beacon-rpc
-      - ${BEACON_RPC:?set BEACON_RPC to your beacon API}
       - --zkboost-url
       - http://zkboost:3000
       - --proof-types
@@ -79,9 +93,10 @@ services:
     volumes:
       - proofessoor-state:/state
     ports:
-      - "9100:9100" # proofessoor dashboard
+      - "${PROOFESSOOR_PORT:-19100}:9100" # dashboard host port; override via PROOFESSOOR_PORT if 19100 is taken
     depends_on:
       - zkboost
 
 volumes:
   proofessoor-state:
+  ere-zisk-setup:
