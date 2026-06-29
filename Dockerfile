@@ -27,10 +27,16 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     cargo build --release --locked \
     && cp target/release/proofessoor /usr/local/bin/proofessoor
 
+# Created here so the distroless runtime (no shell) can COPY it in owned by the
+# nonroot uid; a mounted state volume then inherits writable ownership.
+RUN mkdir -p /state
+
 # --- Stage 3: runtime ---
 FROM gcr.io/distroless/cc-debian12:nonroot AS runtime
 COPY --from=build /usr/local/bin/proofessoor /usr/local/bin/proofessoor
 COPY --from=frontend /app/dist /srv/ui
+# Writable state dir for --state-dir; owned by the distroless nonroot uid (65532).
+COPY --from=build --chown=65532:65532 /state /state
 # The HTTP server (metrics + dashboard) is opt-in via --http-addr; publish
 # whatever port you bind, e.g. -p 9090:9090 with --http-addr 0.0.0.0:9090.
 ENTRYPOINT ["/usr/local/bin/proofessoor"]
