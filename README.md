@@ -53,8 +53,9 @@ Prefer containers? See [Run the full stack](#run-the-full-stack).
 
 Two endpoints are always required — pass them as flags or environment variables:
 
-- **`--beacon-rpc`** (`PROOFESSOOR_BEACON_RPC`) — your Beacon API's HTTP
-  endpoint. Supplies the blocks to prove.
+- **`--beacon-url`** (`PROOFESSOOR_BEACON_URL`) — your Beacon API's HTTP
+  endpoint. Supplies the blocks to prove. For an authenticated beacon, add
+  `--beacon-header "Name: Value"` (`PROOFESSOOR_BEACON_HEADER`), e.g. an API key.
 - **`--zkboost-url`** (`PROOFESSOOR_ZKBOOST_URL`) — your zkBoost instance's
   address. Coordinates the proving.
 
@@ -79,7 +80,7 @@ type is unavailable. Run this first.
 
 ```bash
 proofessoor request \
-  --beacon-rpc <beacon-api> \
+  --beacon-url <beacon-url> \
   --zkboost-url <zkboost-url> \
   --proof-types reth-zisk \
   --block-id head \
@@ -95,7 +96,7 @@ bytes. One-shot `request` can take several proof types at once.
 
 ```bash
 proofessoor stream \
-  --beacon-rpc <beacon-api> \
+  --beacon-url <beacon-url> \
   --zkboost-url <zkboost-url> \
   --proof-types reth-zisk \
   --state-dir ./state \

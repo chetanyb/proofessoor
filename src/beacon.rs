@@ -11,6 +11,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use async_stream::try_stream;
 use futures::{Stream, StreamExt};
 use lighthouse_types::{ForkName, ForkVersionDecode, Hash256, MainnetEthSpec, SignedBeaconBlock};
+use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use reqwest_eventsource::{Event as SseEvent, EventSource};
 use serde::Deserialize;
 use url::Url;
@@ -83,10 +84,16 @@ pub struct Client {
 }
 
 impl Client {
-    /// Creates a client targeting the given Beacon API base URL.
-    pub fn new(endpoint: Url) -> Result<Self> {
+    /// Creates a client targeting the given Beacon API base URL, sending the
+    /// given headers (e.g. an API key) on every request.
+    pub fn new(endpoint: Url, headers: &[(HeaderName, HeaderValue)]) -> Result<Self> {
+        let mut map = HeaderMap::with_capacity(headers.len());
+        for (name, value) in headers {
+            map.insert(name.clone(), value.clone());
+        }
         let http = reqwest::Client::builder()
             .timeout(DEFAULT_TIMEOUT)
+            .default_headers(map)
             .build()
             .context("failed to build Beacon API HTTP client")?;
         Ok(Self { http, endpoint })

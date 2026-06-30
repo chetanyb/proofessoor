@@ -9,6 +9,7 @@ use std::num::NonZeroUsize;
 use std::path::PathBuf;
 
 use clap::{Args, Parser, Subcommand};
+use reqwest::header::{HeaderName, HeaderValue};
 use url::Url;
 
 /// Top-level CLI for the clientless zkBoost proof requestor.
@@ -56,12 +57,17 @@ pub struct StatusArgs {
 #[derive(Debug, Args)]
 pub struct EndpointArgs {
     /// Beacon API base URL (e.g. http://127.0.0.1:5052).
-    #[arg(long, env = "PROOFESSOOR_BEACON_RPC")]
-    pub beacon_rpc: Url,
+    #[arg(long, env = "PROOFESSOOR_BEACON_URL")]
+    pub beacon_url: Url,
 
     /// zkBoost API base URL (e.g. http://127.0.0.1:3000).
     #[arg(long, env = "PROOFESSOOR_ZKBOOST_URL")]
     pub zkboost_url: Url,
+
+    /// Extra HTTP header for the Beacon API in "Name: Value" form (e.g. an API
+    /// key). Repeatable on the CLI; a single header via PROOFESSOOR_BEACON_HEADER.
+    #[arg(long, env = "PROOFESSOOR_BEACON_HEADER", value_parser = parse_header)]
+    pub beacon_header: Vec<(HeaderName, HeaderValue)>,
 }
 
 /// Arguments for `proofessoor request`.
@@ -276,6 +282,23 @@ fn parse_proof_type(value: &str) -> Result<ProofTypeName, String> {
     ProofTypeName::parse(value)
 }
 
+/// clap value parser for an HTTP header in `Name: Value` form.
+fn parse_header(value: &str) -> Result<(HeaderName, HeaderValue), String> {
+    let (name, val) = value
+        .split_once(':')
+        .ok_or_else(|| format!("invalid header '{value}': expected 'Name: Value'"))?;
+    let name = name
+        .trim()
+        .parse::<HeaderName>()
+        .map_err(|e| format!("invalid header name '{}': {e}", name.trim()))?;
+    // The value may be a secret (API key), so never echo it back in the error.
+    let val = val
+        .trim()
+        .parse::<HeaderValue>()
+        .map_err(|_| "invalid header value".to_string())?;
+    Ok((name, val))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -340,5 +363,17 @@ mod tests {
         assert!(ProofTypeName::parse("   ").is_err());
         assert!(ProofTypeName::parse("Reth_Zisk").is_err());
         assert!(ProofTypeName::parse("reth zisk").is_err());
+    }
+
+    #[test]
+    fn parse_header_accepts_name_value() {
+        let (name, value) = parse_header("X-API-Key: secret").expect("valid header");
+        assert_eq!(name.as_str(), "x-api-key");
+        assert_eq!(value.to_str().expect("ascii value"), "secret");
+    }
+
+    #[test]
+    fn parse_header_rejects_missing_colon() {
+        assert!(parse_header("X-API-Key secret").is_err());
     }
 }

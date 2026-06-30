@@ -51,7 +51,10 @@ fn ensure_single_proof_type(count: usize) -> Result<()> {
 pub async fn run(args: StreamArgs) -> Result<()> {
     ensure_single_proof_type(args.proof_types.len())?;
 
-    let beacon = Arc::new(beacon::Client::new(args.endpoints.beacon_rpc.clone())?);
+    let beacon = Arc::new(beacon::Client::new(
+        args.endpoints.beacon_url.clone(),
+        &args.endpoints.beacon_header,
+    )?);
     let zkboost = Arc::new(zkboost::Client::new(args.endpoints.zkboost_url.clone())?);
     let proof_types: Arc<Vec<ProofType>> = Arc::new(
         args.proof_types

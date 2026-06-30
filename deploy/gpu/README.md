@@ -24,7 +24,7 @@ a second `[[zkvm]]` block pointing at it (give it different `device_ids`).
 ```bash
 # 1. set your beacon API (and optionally PROOFESSOOR_PORT)
 cp .env.example .env
-#    then edit .env -> BEACON_RPC
+#    then edit .env -> BEACON_URL
 
 # 2. set your EL endpoint in zkboost.toml -> el_endpoint
 

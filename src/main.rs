@@ -61,7 +61,10 @@ async fn run_request(args: RequestArgs) -> Result<()> {
         anyhow::bail!("--download, --verify, and --out-dir require --wait");
     }
 
-    let beacon = beacon::Client::new(args.endpoints.beacon_rpc.clone())?;
+    let beacon = beacon::Client::new(
+        args.endpoints.beacon_url.clone(),
+        &args.endpoints.beacon_header,
+    )?;
     let zkboost = zkboost::Client::new(args.endpoints.zkboost_url.clone())?;
     let proof_types = args
         .proof_types

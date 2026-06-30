@@ -79,7 +79,9 @@ services:
     restart: unless-stopped
     environment:
       # proofessoor reads the beacon endpoint from this env var (set it in .env).
-      PROOFESSOOR_BEACON_RPC: ${BEACON_RPC:?set BEACON_RPC in .env to your beacon API}
+      PROOFESSOOR_BEACON_URL: ${BEACON_URL:?set BEACON_URL in .env to your beacon API}
+      # For an authenticated beacon, also set a header (uncomment + set BEACON_HEADER):
+      # PROOFESSOOR_BEACON_HEADER: ${BEACON_HEADER}
     command:
       - stream
       - --zkboost-url
