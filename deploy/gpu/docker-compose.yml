@@ -25,6 +25,7 @@ services:
   # boots skip it. The healthcheck gates dependents until it's actually listening.
   ere-server-reth-zisk:
     image: ghcr.io/eth-act/ere/ere-server-zisk:0.12.1-cuda
+    restart: unless-stopped
     command:
       - --port
       - "3000"
@@ -56,6 +57,7 @@ services:
 
   zkboost:
     image: ghcr.io/eth-act/zkboost/zkboost:0.8.0
+    restart: unless-stopped
     command: ["--config", "/config/zkboost.toml"]
     environment:
       RUST_LOG: "info,zkboost=debug"
@@ -74,6 +76,7 @@ services:
     # Published image by default; docker-compose.local.yml swaps this for a
     # from-source build. Pin a version by setting PROOFESSOOR_IMAGE.
     image: ${PROOFESSOOR_IMAGE:-docker.io/chethack/proofessoor:latest}
+    restart: unless-stopped
     environment:
       # proofessoor reads the beacon endpoint from this env var (set it in .env).
       PROOFESSOOR_BEACON_RPC: ${BEACON_RPC:?set BEACON_RPC in .env to your beacon API}
