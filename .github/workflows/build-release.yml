@@ -38,8 +38,13 @@ jobs:
             echo "tags=[\"v$cargo_version\"]" >> "$GITHUB_OUTPUT"
           fi
 
+  # Full CI suite (fmt, clippy, test, cargo-deny, frontend, zizmor) as a release
+  # gate; a failing check blocks the build and release.
+  checks:
+    uses: ./.github/workflows/ci.yml
+
   build:
-    needs: prepare
+    needs: [prepare, checks]
     uses: ./.github/workflows/_shared-build.yaml
     with:
       ref: ${{ github.sha }}
