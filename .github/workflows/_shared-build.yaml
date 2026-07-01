@@ -38,11 +38,9 @@ jobs:
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: "1.3.10"
-      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
-        with:
-          path: frontend/node_modules
-          key: bun-${{ runner.os }}-${{ hashFiles('frontend/bun.lock') }}
-          restore-keys: bun-${{ runner.os }}-
+      # No dependency cache: this dashboard ships in the published image, so the
+      # publish build installs clean — a restored cache is a poisoning vector,
+      # the same reason the binary build below compiles without one.
       - name: Build
         working-directory: frontend
         run: |
@@ -138,10 +136,19 @@ jobs:
           # shellcheck disable=SC2086,SC2046
           docker buildx imagetools create $tag_args \
             $(printf "${IMAGE}@sha256:%s " *)
-      - name: Inspect
+      - name: Inspect and capture the manifest digest
         env:
           IMAGE: ${{ vars.DOCKER_REPOSITORY }}
           TAGS: ${{ inputs.tags }}
         run: |
           first=$(echo "$TAGS" | jq -r '.[0]')
           docker buildx imagetools inspect "${IMAGE}:${first}"
+          docker buildx imagetools inspect "${IMAGE}:${first}" \
+            --format '{{.Manifest.Digest}}' > "${{ runner.temp }}/digest.txt"
+      # Publish the multi-arch manifest digest so a release can retag it instead
+      # of recompiling — this build is cache-free, so the artifact is clean.
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: manifest-digest
+          path: ${{ runner.temp }}/digest.txt
+          if-no-files-found: error

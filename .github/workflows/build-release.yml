@@ -39,22 +39,80 @@ jobs:
           fi
 
   # Full CI suite (fmt, clippy, test, cargo-deny, frontend, zizmor) as a release
-  # gate; a failing check blocks the build and release.
+  # gate; a failing check blocks the promote and release.
   checks:
     uses: ./.github/workflows/ci.yml
 
-  build:
+  # Reuse the image Build Master already built for this commit instead of
+  # recompiling. Build Master compiles cache-free via the shared build, so its
+  # multi-arch manifest is a clean artifact — retag it for the release and the
+  # release ships the exact bits already built from main, with no second compile.
+  promote:
     needs: [prepare, checks]
-    uses: ./.github/workflows/_shared-build.yaml
-    with:
-      ref: ${{ github.sha }}
-      tags: ${{ needs.prepare.outputs.tags }}
-    secrets:
-      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
-      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read # read the Build Master run and download its digest artifact
+    steps:
+      - name: Wait for the Build Master image of this commit
+        id: master
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: |
+          # Build Master builds every push to main, including this release commit.
+          # Poll its run for this exact SHA until it finishes, then take its digest.
+          found=""
+          for _ in $(seq 1 80); do # ~40 min ceiling at 30s
+            run_id=$(gh api "repos/$REPO/actions/workflows/build-master.yml/runs?head_sha=$SHA&per_page=1" \
+              --jq '.workflow_runs[0].id // empty')
+            if [ -n "$run_id" ]; then
+              status=$(gh api "repos/$REPO/actions/runs/$run_id" --jq '.status')
+              if [ "$status" = "completed" ]; then
+                conclusion=$(gh api "repos/$REPO/actions/runs/$run_id" --jq '.conclusion // ""')
+                if [ "$conclusion" != "success" ]; then
+                  echo "::error::Build Master run $run_id concluded '$conclusion'"
+                  exit 1
+                fi
+                echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+                found=1
+                break
+              fi
+            fi
+            echo "waiting for Build Master of $SHA (run ${run_id:-pending})…"
+            sleep 30
+          done
+          if [ -z "$found" ]; then
+            echo "::error::timed out waiting for the Build Master image of $SHA"
+            exit 1
+          fi
+      - name: Download the built manifest digest
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ steps.master.outputs.run_id }}
+        run: gh run download "$RUN_ID" --repo "$REPO" -n manifest-digest -D digest
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Retag the existing digest as the release
+        env:
+          IMAGE: ${{ vars.DOCKER_REPOSITORY }}
+          TAGS: ${{ needs.prepare.outputs.tags }}
+        run: |
+          digest=$(cat digest/digest.txt)
+          tag_args=$(echo "$TAGS" | jq -r --arg img "$IMAGE" '.[] | "-t " + $img + ":" + .')
+          # Word-splitting is intentional: one -t per tag.
+          # shellcheck disable=SC2086
+          docker buildx imagetools create $tag_args "${IMAGE}@${digest}"
+          first=$(echo "$TAGS" | jq -r '.[0]')
+          docker buildx imagetools inspect "${IMAGE}:${first}"
 
   release:
-    needs: [prepare, build]
+    needs: [prepare, promote]
     runs-on: ubuntu-latest
     permissions:
       contents: write
