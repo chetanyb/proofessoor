@@ -80,8 +80,9 @@ services:
     environment:
       # proofessoor reads the beacon endpoint from this env var (set it in .env).
       PROOFESSOOR_BEACON_URL: ${BEACON_URL:?set BEACON_URL in .env to your beacon API}
-      # For an authenticated beacon, also set a header (uncomment + set BEACON_HEADER):
-      # PROOFESSOOR_BEACON_HEADER: ${BEACON_HEADER}
+      # Optional auth header for the beacon: set BEACON_HEADER in .env to use one
+      # (unset = empty, which proofessoor ignores).
+      PROOFESSOOR_BEACON_HEADER: ${BEACON_HEADER:-}
     command:
       - stream
       - --zkboost-url

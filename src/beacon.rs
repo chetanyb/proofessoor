@@ -83,17 +83,40 @@ pub struct Client {
     endpoint: Url,
 }
 
+/// Parses "Name: Value" header strings into a [`HeaderMap`], ignoring blank
+/// entries — an unset `PROOFESSOOR_BEACON_HEADER` reaches us as one empty string.
+fn build_header_map(headers: &[String]) -> Result<HeaderMap> {
+    let mut map = HeaderMap::with_capacity(headers.len());
+    for raw in headers {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let (name, value) = trimmed.split_once(':').with_context(|| {
+            format!("invalid beacon header '{trimmed}': expected 'Name: Value'")
+        })?;
+        let name: HeaderName = name
+            .trim()
+            .parse()
+            .with_context(|| format!("invalid beacon header name '{}'", name.trim()))?;
+        // The value may be a secret (API key), so never echo it back in the error.
+        let value: HeaderValue = value
+            .trim()
+            .parse()
+            .context("invalid beacon header value")?;
+        map.insert(name, value);
+    }
+    Ok(map)
+}
+
 impl Client {
     /// Creates a client targeting the given Beacon API base URL, sending the
-    /// given headers (e.g. an API key) on every request.
-    pub fn new(endpoint: Url, headers: &[(HeaderName, HeaderValue)]) -> Result<Self> {
-        let mut map = HeaderMap::with_capacity(headers.len());
-        for (name, value) in headers {
-            map.insert(name.clone(), value.clone());
-        }
+    /// given "Name: Value" headers (e.g. an API key) on every request. Blank
+    /// entries are ignored, so an unset PROOFESSOOR_BEACON_HEADER is fine.
+    pub fn new(endpoint: Url, headers: &[String]) -> Result<Self> {
         let http = reqwest::Client::builder()
             .timeout(DEFAULT_TIMEOUT)
-            .default_headers(map)
+            .default_headers(build_header_map(headers)?)
             .build()
             .context("failed to build Beacon API HTTP client")?;
         Ok(Self { http, endpoint })
@@ -181,5 +204,23 @@ impl Client {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn build_header_map_parses_and_skips_blanks() {
+        let map = build_header_map(&["X-API-Key: secret".to_string(), "   ".to_string()])
+            .expect("valid headers");
+        assert_eq!(map.len(), 1);
+        assert_eq!(map.get("x-api-key").expect("header present"), "secret");
+    }
+
+    #[test]
+    fn build_header_map_rejects_missing_colon() {
+        assert!(build_header_map(&["X-API-Key secret".to_string()]).is_err());
     }
 }
