@@ -1,0 +1,72 @@
+# proofessoor + zkboost with mock proving — no GPU, no ere-server.
+#
+# zkboost's mock backend still fetches the execution witness from the EL and
+# executes the block statelessly; it only replaces real ZK proving with a random
+# delay (2-10s, see zkboost.toml). So you still need a working EL and beacon —
+# this stack just drops the expensive prover, which makes it cheap to exercise
+# the full proofessoor -> zkboost path, the dashboards, and the timing data on
+# any machine.
+#
+# Prerequisites:
+#   - An EL RPC that serves debug_executionWitnessByBlockHash for the blocks you
+#     prove (e.g. a hoodi reth supernode). Set el_endpoint in zkboost.toml.
+#   - A Beacon API proofessoor reads blocks from. Set BEACON_URL in .env.
+#
+# Run (published proofessoor image):
+#   docker compose up -d
+# Run (build proofessoor from source):
+#   docker compose -f docker-compose.yml -f docker-compose.local.yml up -d
+#
+#   open http://localhost:19100          # proofessoor dashboard
+#   open http://localhost:3000/dashboard # zkboost built-in dashboard
+
+name: proofessoor-mock
+
+services:
+  zkboost:
+    image: ghcr.io/eth-act/zkboost/zkboost:0.8.0
+    restart: unless-stopped
+    command: ["--config", "/config/zkboost.toml"]
+    environment:
+      RUST_LOG: "info,zkboost=debug"
+    volumes:
+      - ./zkboost.toml:/config/zkboost.toml:ro
+      # If your EL doesn't serve debug_chainConfig (e.g. a public RPC), generate a
+      # chain config (see README) and uncomment to load it:
+      # - ./hoodi_chain_config.json:/config/hoodi_chain_config.json:ro
+    ports:
+      - "3000:3000" # zkboost API + /dashboard
+
+  proofessoor:
+    # Published image by default; docker-compose.local.yml swaps this for a
+    # from-source build. Pin a version by setting PROOFESSOOR_IMAGE.
+    image: ${PROOFESSOOR_IMAGE:-docker.io/chethack/proofessoor:latest}
+    restart: unless-stopped
+    environment:
+      # proofessoor reads the beacon endpoint from this env var (set it in .env).
+      PROOFESSOOR_BEACON_URL: ${BEACON_URL:?set BEACON_URL in .env to your beacon API}
+      # Optional auth header for the beacon: set BEACON_HEADER in .env to use one
+      # (unset = empty, which proofessoor ignores).
+      PROOFESSOOR_BEACON_HEADER: ${BEACON_HEADER:-}
+    command:
+      - stream
+      - --zkboost-url
+      - http://zkboost:3000
+      - --proof-types
+      - reth-zisk
+      - --verify
+      - --state-dir
+      - /state
+      - --http-addr
+      - 0.0.0.0:9100
+      - --ui-dir
+      - /srv/ui
+    volumes:
+      - proofessoor-state:/state
+    ports:
+      - "${PROOFESSOOR_PORT:-19100}:9100" # dashboard host port; override via PROOFESSOOR_PORT if 19100 is taken
+    depends_on:
+      - zkboost
+
+volumes:
+  proofessoor-state:

@@ -1,0 +1,85 @@
+# proofessoor + zkboost (mock proving)
+
+A no-GPU stack: **proofessoor** (requestor + dashboard) → **zkboost** with its
+**mock** backend. No `ere-server`, no prover, no GPU.
+
+## What "mock" means here
+
+zkboost's mock backend still does almost everything the real one does: it fetches
+the execution witness from the EL and executes the block statelessly. It only
+replaces the expensive ZK proving step with a **random 2-10 second delay** and
+returns a dummy proof. That makes this stack cheap to run anywhere while still
+exercising the full proofessoor → zkboost path — witness fetch, block execution,
+request lifecycle, the dashboards, and the timing data — exactly as production
+would, minus the prover.
+
+Because the witness fetch and execution are real, **you still need a working EL
+and Beacon API**. The only thing removed is the prover.
+
+## Prerequisites
+
+- An **EL RPC** that serves `debug_executionWitnessByBlockHash` (e.g. a hoodi
+  reth supernode) — zkBoost fetches the witness here; a rate-limited public RPC
+  causes `WitnessTimeout`.
+- A **Beacon API** — proofessoor reads blocks here.
+
+## Quick start
+
+```bash
+# 1. set your beacon API (and optionally PROOFESSOOR_PORT)
+cp .env.example .env
+#    then edit .env -> BEACON_URL
+
+# 2. set your EL endpoint in zkboost.toml -> el_endpoint
+
+# 3. build proofessoor from source and start the stack
+docker compose -f docker-compose.yml -f docker-compose.local.yml up -d
+```
+
+Once the image is published, the base file alone (`docker compose up -d`) pulls
+it instead of building (set `PROOFESSOOR_IMAGE` to pin a version).
+
+| What | URL |
+| --- | --- |
+| proofessoor dashboard | http://localhost:19100 |
+| zkboost dashboard | http://localhost:3000/dashboard |
+
+## Tuning the mock
+
+The proving delay lives in `zkboost.toml` under `[[zkvm]]`:
+
+```toml
+mock_proving_time = { kind = "random", min_ms = 2000, max_ms = 10000 }
+```
+
+Other modes the mock backend accepts:
+
+- `{ kind = "constant", ms = 6000 }` — a fixed delay.
+- `{ kind = "linear", ms_per_mgas = 500 }` — delay proportional to gas used, so
+  bigger blocks "prove" slower (closer to real-world behaviour).
+
+If you change `max_ms` above the `proof_timeout_secs` in the same block, proofs
+will time out — keep the timeout comfortably larger.
+
+## Chain config
+
+zkBoost gets the chain config straight from your EL via `debug_chainConfig`, so
+with a proper EL there's nothing to set — whatever chain the EL runs is what gets
+executed. Some public RPCs don't serve that method; if yours doesn't, generate
+the config for your network and point zkBoost at it (hoodi shown — swap `hoodi`
+for your network):
+
+```bash
+curl -s https://raw.githubusercontent.com/eth-clients/hoodi/main/metadata/genesis.json \
+  | jq '.config' > hoodi_chain_config.json
+```
+
+then uncomment `chain_config_path` in `zkboost.toml` and its mount in
+`docker-compose.yml`. Regenerate it if the network schedules a new fork.
+
+## Notes
+
+- For real proving on a GPU box, see [`../gpu/`](../gpu/) — the same stack with an
+  `ere-server` (ZisK) backend instead of the mock.
+- `proofessoor` builds from source via `docker-compose.local.yml`; drop that `-f`
+  to run the published image instead.

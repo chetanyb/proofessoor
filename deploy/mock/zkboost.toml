@@ -1,0 +1,29 @@
+# zkboost — mock proving (no GPU, no ere-server), with the built-in dashboard on.
+#
+# The mock backend still fetches the witness from the EL and executes the block
+# statelessly; it only swaps real ZK proving for a random delay. So a working EL
+# is still required — only the prover is mocked.
+port = 3000
+
+# REQUIRED — an EL JSON-RPC that serves debug_executionWitnessByBlockHash for the
+# blocks you prove (e.g. a hoodi reth supernode). zkboost fetches the witness here
+# and executes the block; a rate-limited public RPC causes WitnessTimeout.
+el_endpoint = "http://CHANGE-ME-hoodi-el:8545"
+# zkBoost gets the chain config from the EL via debug_chainConfig. If your EL
+# doesn't serve it (e.g. a public RPC), generate a chain config (see README) and
+# uncomment the next line plus its mount in docker-compose.yml:
+# chain_config_path = "/config/hoodi_chain_config.json"
+witness_timeout_secs = 12
+
+[dashboard]
+enabled = true          # served at http://localhost:3000/dashboard (off by default)
+retention = 256
+
+# Mock backend: execute the block, then simulate proving for a uniformly random
+# 2-10 seconds. No prover or GPU involved.
+[[zkvm]]
+kind = "mock"
+proof_type = "reth-zisk"
+mock_proving_time = { kind = "random", min_ms = 2000, max_ms = 10000 }
+proof_timeout_secs = 30   # must exceed max_ms above (default is 12s)
+# mock_proof_size = 131072  # bytes returned as the "proof"; defaults to 128 KiB

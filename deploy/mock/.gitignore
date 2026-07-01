@@ -1,0 +1,4 @@
+# Operator-specific; never commit.
+.env
+# Generated per-network (see README); not bundled.
+*_chain_config.json

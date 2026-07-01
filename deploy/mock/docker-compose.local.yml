@@ -1,0 +1,7 @@
+# Override: build proofessoor from source instead of pulling the published image.
+#   docker compose -f docker-compose.yml -f docker-compose.local.yml up -d
+services:
+  proofessoor:
+    build:
+      context: ../.. # the proofessoor repo root
+    image: proofessoor:local
